@@ -166,6 +166,30 @@ internal class RouterPage : BasePager() {
                 Text {
                     attr {
                         fontSize(20f)
+                        text("进入 dsh 控制台")
+                        textDecorationUnderLine()
+                        backgroundLinearGradient(
+                            Direction.TO_RIGHT,
+                            ColorStop(Color(0xFF23D3FD), 0f),
+                            ColorStop(Color(0xFFAD37FE), 1f)
+                        )
+                    }
+                }
+                event {
+                    click {
+                        ctx.jumpPage("home_pager")
+                    }
+                }
+            }
+
+            View {
+                attr {
+                    allCenter()
+                    margin(20f)
+                }
+                Text {
+                    attr {
+                        fontSize(20f)
                         text("ImageAdapter基准测试")
                         textDecorationUnderLine()
                         backgroundLinearGradient(

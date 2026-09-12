@@ -21,6 +21,7 @@ import com.elyric.lcwhale.adapter.KRRouterAdapter
 import com.elyric.lcwhale.adapter.KRThreadAdapter
 import com.elyric.lcwhale.adapter.KRUncaughtExceptionHandlerAdapter
 import com.elyric.lcwhale.module.KRBridgeModule
+import com.elyric.lcwhale.module.KRLcWhaleWebSocketModule
 import com.elyric.lcwhale.module.KRShareModule
 import org.json.JSONObject
 
@@ -76,6 +77,9 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
             }
             moduleExport(KRShareModule.MODULE_NAME) {
                 KRShareModule()
+            }
+            moduleExport(KRLcWhaleWebSocketModule.MODULE_NAME) {
+                KRLcWhaleWebSocketModule()
             }
         }
     }
