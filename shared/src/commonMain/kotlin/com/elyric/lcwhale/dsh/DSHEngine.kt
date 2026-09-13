@@ -128,6 +128,8 @@ internal class ApprovalRequest(
  */
 internal class ChatSession(val sessionId: String, initialTitle: String) : BaseObject() {
 
+    var onMessagesChanged: (() -> Unit)? = null
+
     var title: String by observable(initialTitle)
     var turnState: RunState by observable(RunState.IDLE)
     var error: String by observable("")
@@ -145,6 +147,8 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
 
     /** 当前正在流式输出的助手消息(同一 turn 内增量追加)。 */
     private var streamingMessage: ChatMessage? = null
+    private var streamingReasoningMessage: ChatMessage? = null
+    private val optimisticUserMessages = mutableMapOf<String, Int>()
 
     private val runningTools = mutableMapOf<String, String>()
     private val finishedTools = mutableListOf<String>()
@@ -161,21 +165,46 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
         runningTools.clear()
         finishedTools.clear()
         streamingMessage = null
+        streamingReasoningMessage = null
     }
 
     fun onEvent(data: JSONObject) {
         when (data.optString("kind")) {
             DSHProtocol.EVT_SESSION_USER_MESSAGE -> {
-                appendMessage("user", data.optString("text"))
+                val text = data.optString("text")
+                val pending = optimisticUserMessages[text]
+                if (pending != null && pending > 0) {
+                    if (pending == 1) optimisticUserMessages.remove(text) else optimisticUserMessages[text] = pending - 1
+                } else {
+                    appendMessage("user", text)
+                }
             }
             DSHProtocol.EVT_ASSISTANT_MESSAGE -> onAssistantMessage(data)
             DSHProtocol.EVT_ASSISTANT_CHUNK -> onAssistantChunk(data)
             DSHProtocol.EVT_ASSISTANT_REASONING -> {
                 val text = data.optString("text")
-                if (text.isNotEmpty()) reasoningText = if (reasoningText.isEmpty()) text else "$reasoningText\n$text"
+                if (text.isNotEmpty()) {
+                    reasoningText = if (reasoningText.isEmpty()) text else "$reasoningText\n$text"
+                    val streamed = streamingReasoningMessage
+                    if (streamed != null) {
+                        streamed.text = text
+                        onMessagesChanged?.invoke()
+                    } else {
+                        appendMessage("reasoning", text)
+                    }
+                }
             }
             DSHProtocol.EVT_ASSISTANT_REASONING_CHUNK -> {
-                reasoningText += data.optString("text")
+                val text = data.optString("text")
+                reasoningText += text
+                if (text.isNotEmpty()) {
+                    val target = streamingReasoningMessage ?: ChatMessage("reasoning").also {
+                        messages.add(it)
+                        streamingReasoningMessage = it
+                    }
+                    target.text += text
+                    onMessagesChanged?.invoke()
+                }
             }
             DSHProtocol.EVT_SESSION_TODO -> onTodo(data)
             DSHProtocol.EVT_SESSION_PLAN -> {
@@ -204,17 +233,24 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
 
     /** session.history 的落盘历史,整体替换消息列表。 */
     fun replaceAllHistory(history: JSONArray?) {
-        streamingMessage = null
-        messages.clear()
+        // A successful response may omit history in some plugin versions.
+        // Preserve live and optimistic messages instead of clearing them.
         if (history == null) return
+        streamingMessage = null
+        streamingReasoningMessage = null
+        messages.clear()
         for (i in 0 until history.length()) {
             val m = history.optJSONObject(i) ?: continue
             val role = m.optString("role")
             val text = m.optString("text")
-            if (role != "user" && role != "assistant") continue
-            if (text.startsWith("<system-reminder")) continue // 宿主注入的上下文,过滤
-            messages.add(ChatMessage(role).also { it.text = text })
+            if (text.isEmpty()) continue
+            val normalizedRole = when (role) {
+                "assistant", "user", "reasoning", "tool", "system", "context" -> role
+                else -> "context"
+            }
+            messages.add(ChatMessage(normalizedRole).also { it.text = text })
         }
+        onMessagesChanged?.invoke()
     }
 
     fun onTurnResult(res: DSHRequestResult) {
@@ -239,6 +275,14 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
     private fun appendMessage(role: String, text: String) {
         if (text.isEmpty()) return
         messages.add(ChatMessage(role).also { it.text = text })
+        onMessagesChanged?.invoke()
+    }
+
+    fun addOptimisticUserMessage(text: String) {
+        if (text.isEmpty()) return
+        messages.add(ChatMessage("user").also { it.text = text })
+        optimisticUserMessages[text] = (optimisticUserMessages[text] ?: 0) + 1
+        onMessagesChanged?.invoke()
     }
 
     private fun onAssistantMessage(data: JSONObject) {
@@ -259,9 +303,10 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
                 streamedSteps.add(stepKey(data))
                 val target = streamingMessage ?: ChatMessage("assistant").also {
                     messages.add(it)
-                    streamingMessage = it
-                }
+                streamingMessage = it
+            }
                 target.text += chunk.optString("text")
+                onMessagesChanged?.invoke()
             }
             else -> Unit // reasoning-delta / tool-call-delta / block-* / usage / finish / 未知:忽略
         }
@@ -271,7 +316,9 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
         val callId = data.optString("callId")
         if (callId.isEmpty() || runningTools.containsKey(callId)) return
         val label = data.optString("label")
-        runningTools[callId] = if (label.isNotEmpty()) label else data.optString("name")
+        val displayName = if (label.isNotEmpty()) label else data.optString("name")
+        runningTools[callId] = displayName
+        appendMessage("tool", "调用 $displayName  ·  运行中")
         rebuildToolSummary()
     }
 
@@ -280,6 +327,8 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
         val name = runningTools.remove(callId) ?: ""
         val ok = data.optBoolean("ok")
         finishedTools.add("• $name ${if (ok) "完成" else "失败"}")
+        val resultText = data.optString("text").ifEmpty { if (ok) "完成" else data.optJSONObject("error")?.optString("message").orEmpty().ifEmpty { "失败" } }
+        appendMessage("tool", "$name  ·  ${if (ok) "完成" else "失败"}\n$resultText")
         rebuildToolSummary()
     }
 
@@ -576,7 +625,10 @@ internal class DSHEngine(private val client: DSHClient) {
                 onDone?.invoke()
                 return@sendRequest
             }
-            session.replaceAllHistory(res.data?.optJSONArray("messages"))
+            val history = res.data?.optJSONArray("messages")
+                ?: res.data?.optJSONArray("history")
+                ?: res.data?.optJSONObject("session")?.optJSONArray("messages")
+            session.replaceAllHistory(history)
             onDone?.invoke()
         }
     }
@@ -604,6 +656,8 @@ internal class DSHEngine(private val client: DSHClient) {
             return false
         }
         session.beginTurn()
+        session.addOptimisticUserMessage(prompt)
+        println("[DSH_TRACE] session.send accepted id=$sessionId promptLen=${prompt.length} messages=${session.messages.size}")
         val payload = JSONObject()
         payload.put("sessionId", sessionId)
         payload.put("prompt", prompt)
@@ -712,10 +766,13 @@ internal class DSHEngine(private val client: DSHClient) {
     // ── 事件路由 ─────────────────────────────────────────────────────────────
 
     private fun onTopic(push: String, data: JSONObject) {
+        println("[DSH_TRACE] route push=$push kind=${data.optString("kind")}")
         when {
             push.startsWith(DSHProtocol.TOPIC_SESSION_PREFIX) -> {
                 val sessionId = push.removePrefix(DSHProtocol.TOPIC_SESSION_PREFIX)
-                chatSessions[sessionId]?.onEvent(data)
+                val session = chatSessions[sessionId]
+                println("[DSH_TRACE] session lookup id=$sessionId found=${session != null}")
+                session?.onEvent(data)
             }
             push.startsWith(DSHProtocol.TOPIC_TASK_PREFIX) -> {
                 onTaskTopic(push, data)

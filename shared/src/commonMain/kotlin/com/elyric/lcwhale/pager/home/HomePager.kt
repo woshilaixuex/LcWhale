@@ -6,12 +6,12 @@ import com.elyric.lcwhale.dsh.SessionSummaryUi
 import com.elyric.lcwhale.dsh.WorkspaceUi
 import com.elyric.lcwhale.foundation.constant.NetConstant
 import com.elyric.lcwhale.foundation.view.WhalePager
+import com.elyric.lcwhale.foundation.theme.AppThemeState
+import com.elyric.lcwhale.foundation.theme.ThemeMode
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
-import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.base.ViewRef
-import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.module.SharedPreferencesModule
@@ -21,13 +21,12 @@ import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.InputView
-import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.core.views.compose.Button
 
 /**
- * 连接页:管理到 dsh 的连接,展示连接信息与已有会话列表。
+ * 首页：负责建立 dsh 连接并预加载工作区、会话数据；具体列表在对应页面展示。
  */
 @Page("home_pager")
 internal class HomePager : WhalePager() {
@@ -65,167 +64,127 @@ internal class HomePager : WhalePager() {
     override fun body(): ViewBuilder {
         val ctx = this
         return {
+            attr {
+                backgroundColor(ctx.palette.page)
+            }
+
             RouterNavBar {
                 attr {
                     title = "dsh 连接"
-                    backDisable = false
+                    backDisable = true
                 }
             }
 
-            // 连接栏
             View {
-                attr {
-                    padding(all = 10f)
-                    flexDirectionRow()
-                }
-                Input {
-                    ref { ctx.urlRef = it }
-                    attr {
-                        flex(1f)
-                        height(38f)
-                        fontSize(14f)
-                        color(Color(0xFF333333))
-                        placeholder("ws://host:port")
-                        placeholderColor(Color(0xFFAAAAAA))
-                    }
-                    event {
-                        textDidChange { ctx.urlInput = it.text }
-                    }
-                }
-                Button {
-                    attr {
-                        size(72f, 38f)
-                        borderRadius(6f)
-                        marginLeft(8f)
-                        backgroundColor(
-                            if (ctx.isConnected()) Color(0xFF9E9E9E) else Color(0xFF2196F3)
-                        )
-                        titleAttr {
-                            text(if (ctx.isConnected()) "断开" else "连接")
-                            fontSize(14f)
-                            color(Color.WHITE)
-                        }
-                    }
-                    event {
-                        click { ctx.toggleConnect() }
-                    }
-                }
-            }
-
-            Text {
-                attr {
-                    text(ctx.statusText)
-                    fontSize(13f)
-                    marginLeft(10f)
-                    color(if (ctx.isConnected()) Color(0xFF4CAF50) else Color(0xFF9E9E9E))
-                }
-            }
-
-            // 操作栏
-            View {
-                attr {
-                    padding(all = 10f)
-                    flexDirectionRow()
-                }
-                Button {
-                    attr {
-                        size(110f, 38f)
-                        borderRadius(6f)
-                        backgroundColor(Color(0xFF4CAF50))
-                        titleAttr {
-                            text("新建会话")
-                            fontSize(14f)
-                            color(Color.WHITE)
-                        }
-                    }
-                    event {
-                        click { ctx.openChat(null) }
-                    }
-                }
-                Button {
-                    attr {
-                        size(80f, 38f)
-                        borderRadius(6f)
-                        marginLeft(8f)
-                        backgroundColor(Color(0xFF2196F3))
-                        titleAttr {
-                            text("刷新")
-                            fontSize(14f)
-                            color(Color.WHITE)
-                        }
-                    }
-                    event {
-                        click { ctx.refreshAll() }
-                    }
-                }
-                Button {
-                    attr {
-                        size(110f, 38f)
-                        borderRadius(6f)
-                        marginLeft(8f)
-                        backgroundColor(Color(0xFF795548))
-                        titleAttr {
-                            text("进入工作区")
-                            fontSize(14f)
-                            color(Color.WHITE)
-                        }
-                    }
-                    event {
-                        click { ctx.openWorkspacePage() }
-                    }
-                }
-            }
-
-            vif({ ctx.notice.isNotEmpty() }) {
-                Text {
-                    attr {
-                        text(ctx.notice)
-                        fontSize(12f)
-                        marginLeft(10f)
-                        color(Color(0xFFFF9800))
-                    }
-                }
-            }
-
-            Text {
-                attr {
-                    text("工作区")
-                    fontSize(13f)
-                    fontWeightBold()
-                    marginLeft(10f)
-                    marginTop(6f)
-                    color(Color(0xFF666666))
-                }
-            }
-
-            Scroller {
-                attr {
-                    height(140f)
-                    padding(all = 10f)
-                }
-                vfor({ ctx.workspaceList }) { ws ->
-                    WorkspaceRow(ws) { ctx.openChatInWorkspace(ws) }
-                }
-            }
-
-            Text {
-                attr {
-                    text("会话列表")
-                    fontSize(13f)
-                    fontWeightBold()
-                    marginLeft(10f)
-                    marginTop(6f)
-                    color(Color(0xFF666666))
-                }
-            }
-
-            Scroller {
                 attr {
                     flex(1f)
-                    padding(all = 10f)
+                    allCenter()
                 }
-                vfor({ ctx.sessionList }) { summary ->
-                    SessionRow(summary) { ctx.openChat(summary) }
+                View {
+                    attr {
+                        width(pagerData.pageViewWidth * 0.86f)
+                        margin(all = 20f)
+                        padding(all = 22f)
+                        borderRadius(12f)
+                        backgroundColor(ctx.palette.surface)
+                    }
+                    Text {
+                        attr {
+                            text("连接到 DSH")
+                            fontSize(22f)
+                            fontWeightBold()
+                            color(ctx.palette.text)
+                            marginBottom(8f)
+                        }
+                    }
+                    Text {
+                        attr {
+                            text("输入 WebSocket 地址以开始使用")
+                            fontSize(13f)
+                            color(ctx.palette.textMuted)
+                            marginBottom(18f)
+                        }
+                    }
+                    View {
+                        attr { flexDirectionRow() }
+                        Input {
+                            ref { ctx.urlRef = it }
+                            attr {
+                                flex(1f)
+                                height(42f)
+                                fontSize(14f)
+                                color(ctx.palette.text)
+                                placeholder("ws://host:port")
+                                placeholderColor(ctx.palette.textMuted)
+                            }
+                            event { textDidChange { ctx.urlInput = it.text } }
+                        }
+                        Button {
+                            attr {
+                                size(78f, 42f)
+                                borderRadius(6f)
+                                marginLeft(8f)
+                                backgroundColor(if (ctx.isConnected()) Color(0xFF9E9E9E) else Color(0xFF2196F3))
+                                titleAttr {
+                                    text(if (ctx.isConnected()) "断开" else "连接")
+                                    fontSize(14f)
+                                    color(Color.WHITE)
+                                }
+                            }
+                            event { click { ctx.toggleConnect() } }
+                        }
+                    }
+                    Text {
+                        attr {
+                            text(ctx.statusText)
+                            fontSize(13f)
+                            marginTop(12f)
+                            color(if (ctx.isConnected()) Color(0xFF4CAF50) else ctx.palette.textMuted)
+                        }
+                    }
+                    View {
+                        attr {
+                            flexDirectionRow()
+                            allCenter()
+                            marginTop(20f)
+                        }
+                        Button {
+                            attr {
+                                size(108f, 38f)
+                                borderRadius(6f)
+                                backgroundColor(Color(0xFF4CAF50))
+                                titleAttr { text("新建会话"); fontSize(14f); color(Color.WHITE) }
+                            }
+                            event { click { ctx.openChat(null) } }
+                        }
+                        Button {
+                            attr {
+                                size(108f, 38f)
+                                borderRadius(6f)
+                                marginLeft(8f)
+                                backgroundColor(Color(0xFF795548))
+                                titleAttr { text("进入工作区"); fontSize(14f); color(Color.WHITE) }
+                            }
+                            event { click { ctx.openWorkspacePage() } }
+                        }
+                    }
+                    vif({ ctx.notice.isNotEmpty() }) {
+                        Text {
+                            attr {
+                                text(ctx.notice)
+                                fontSize(12f)
+                                marginTop(14f)
+                                color(Color(0xFFFF9800))
+                            }
+                        }
+                    }
+                    View {
+                        attr { flexDirectionRow(); allCenter(); marginTop(18f) }
+                        Text { attr { text("主题"); fontSize(13f); color(ctx.palette.textMuted); marginRight(8f) } }
+                        ThemeButton(ThemeMode.LIGHT, ctx.palette, AppThemeState.mode == ThemeMode.LIGHT) { ctx.setThemeMode(ThemeMode.LIGHT) }
+                        ThemeButton(ThemeMode.DARK, ctx.palette, AppThemeState.mode == ThemeMode.DARK) { ctx.setThemeMode(ThemeMode.DARK) }
+                        ThemeButton(ThemeMode.SYSTEM, ctx.palette, AppThemeState.mode == ThemeMode.SYSTEM) { ctx.setThemeMode(ThemeMode.SYSTEM) }
+                    }
                 }
             }
         }
@@ -285,11 +244,6 @@ internal class HomePager : WhalePager() {
         openChatPage(summary?.sessionId ?: "", summary?.title ?: "", summary?.cwd ?: "")
     }
 
-    private fun openChatInWorkspace(workspace: WorkspaceUi) {
-        // 在工作区目录下新建会话
-        openChatPage("", workspace.title, workspace.path)
-    }
-
     private fun openChatPage(sessionId: String, title: String, cwd: String) {
         val pageData = JSONObject()
         pageData.put("sessionId", sessionId)
@@ -313,92 +267,24 @@ internal class HomePager : WhalePager() {
     }
 }
 
-private fun ViewContainer<*, *>.SessionRow(summary: SessionSummaryUi, onClick: () -> Unit) {
-    View {
+private fun com.tencent.kuikly.core.base.ViewContainer<*, *>.ThemeButton(
+    mode: ThemeMode,
+    palette: com.elyric.lcwhale.foundation.theme.ThemePalette,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Button {
         attr {
-            margin(all = 6f)
-            padding(all = 10f)
-            borderRadius(8f)
-            backgroundColor(Color(0xFFF7F7F7))
-        }
-        Text {
-            attr {
-                text(summary.title.ifEmpty { summary.sessionId })
-                fontSize(14f)
-                fontWeightBold()
-                color(Color(0xFF222222))
-            }
-        }
-        Text {
-            attr {
-                val source = if (summary.source == "host") "宿主" else "本客户端"
-                val live = if (summary.live) " · 常驻" else ""
-                text("$source · ${summary.messageCount} 条$live")
+            size(72f, 30f)
+            borderRadius(15f)
+            marginLeft(4f)
+            backgroundColor(if (selected) palette.accent else palette.surfaceMuted)
+            titleAttr {
+                text(mode.label)
                 fontSize(12f)
-                marginTop(4f)
-                color(Color(0xFF2196F3))
+                color(if (selected) Color.WHITE else palette.text)
             }
         }
-        if (summary.cwd.isNotEmpty()) {
-            Text {
-                attr {
-                    text(summary.cwd)
-                    fontSize(11f)
-                    marginTop(2f)
-                    color(Color(0xFF999999))
-                }
-            }
-        }
-        if (summary.lastMessage.isNotEmpty()) {
-            Text {
-                attr {
-                    text(summary.lastMessage)
-                    fontSize(12f)
-                    marginTop(4f)
-                    color(Color(0xFF666666))
-                }
-            }
-        }
-        event {
-            click { onClick() }
-        }
-    }
-}
-
-private fun ViewContainer<*, *>.WorkspaceRow(workspace: WorkspaceUi, onClick: () -> Unit) {
-    View {
-        attr {
-            margin(all = 6f)
-            padding(all = 10f)
-            borderRadius(8f)
-            backgroundColor(Color(0xFFF0F7F4))
-        }
-        Text {
-            attr {
-                text(workspace.title.ifEmpty { workspace.workspaceId })
-                fontSize(13f)
-                fontWeightBold()
-                color(Color(0xFF1B5E20))
-            }
-        }
-        Text {
-            attr {
-                text(workspace.path)
-                fontSize(11f)
-                marginTop(2f)
-                color(Color(0xFF999999))
-            }
-        }
-        Text {
-            attr {
-                text("${workspace.sessionIds.size} 个会话 · 点此新建会话")
-                fontSize(11f)
-                marginTop(4f)
-                color(Color(0xFF4CAF50))
-            }
-        }
-        event {
-            click { onClick() }
-        }
+        event { click { onClick() } }
     }
 }

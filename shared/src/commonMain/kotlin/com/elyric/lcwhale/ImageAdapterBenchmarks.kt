@@ -1,6 +1,7 @@
 package com.elyric.lcwhale
 
 import com.elyric.lcwhale.base.BasePager
+import com.elyric.lcwhale.foundation.theme.AppThemeState
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
@@ -82,6 +83,10 @@ internal class ImageAdapterStandardTest : BasePager() {
     override fun body(): ViewBuilder {
         val ctx = this
         return {
+            attr {
+                backgroundColor(AppThemeState.palette.page)
+            }
+
             RouterNavBar {
                 attr {
                     title = "ImageAdapter基准测试"

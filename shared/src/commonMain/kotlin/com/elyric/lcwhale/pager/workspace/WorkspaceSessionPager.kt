@@ -5,6 +5,7 @@ import com.elyric.lcwhale.dsh.ConnectState
 import com.elyric.lcwhale.dsh.SessionSummaryUi
 import com.elyric.lcwhale.dsh.WorkspaceUi
 import com.elyric.lcwhale.foundation.view.WhalePager
+import com.elyric.lcwhale.foundation.theme.ThemePalette
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
@@ -30,6 +31,8 @@ internal class WorkspaceSessionPager : WhalePager() {
     private var workspaceList: ObservableList<WorkspaceUi> by observableList()
     private var sessionList: ObservableList<SessionSummaryUi> by observableList()
     private var unassignedSessionList: ObservableList<SessionSummaryUi> by observableList()
+    private var expandedWorkspaceIds by observable(setOf<String>())
+    private var unassignedExpanded by observable(false)
 
     override fun created() {
         super.created()
@@ -52,6 +55,10 @@ internal class WorkspaceSessionPager : WhalePager() {
     override fun body(): ViewBuilder {
         val ctx = this
         return {
+            attr {
+                backgroundColor(ctx.palette.page)
+            }
+
             RouterNavBar {
                 attr {
                     title = "工作区与会话"
@@ -69,14 +76,14 @@ internal class WorkspaceSessionPager : WhalePager() {
                         text(ctx.statusText)
                         fontSize(13f)
                         flex(1f)
-                        color(if (ctx.engine.isConnected()) Color(0xFF4CAF50) else Color(0xFF777777))
+                        color(if (ctx.engine.isConnected()) ctx.palette.success else ctx.palette.textMuted)
                     }
                 }
                 Button {
                     attr {
                         size(72f, 34f)
                         borderRadius(6f)
-                        backgroundColor(Color(0xFF2196F3))
+                        backgroundColor(ctx.palette.accent)
                         titleAttr {
                             text("刷新")
                             fontSize(13f)
@@ -93,7 +100,7 @@ internal class WorkspaceSessionPager : WhalePager() {
                         text(ctx.notice)
                         fontSize(12f)
                         marginLeft(10f)
-                        color(Color(0xFFFF9800))
+                        color(ctx.palette.warning)
                     }
                 }
             }
@@ -107,24 +114,20 @@ internal class WorkspaceSessionPager : WhalePager() {
                     WorkspaceSection(
                         workspace = workspace,
                         sessions = ctx.sessionsFor(workspace),
+                        expanded = workspace.workspaceId in ctx.expandedWorkspaceIds,
+                        palette = ctx.palette,
                         onClick = { session -> ctx.openSession(session) },
                         onNewSession = { ctx.openNewSession(workspace) },
+                        onToggle = { ctx.toggleWorkspace(workspace.workspaceId) },
                     )
                 }
-                vif({ ctx.unassignedSessionList.isNotEmpty() }) {
-                    Text {
-                        attr {
-                            text("未归属工作区")
-                            fontSize(14f)
-                            fontWeightBold()
-                            marginTop(12f)
-                            color(Color(0xFF555555))
-                        }
-                    }
-                    vfor({ ctx.unassignedSessionList }) { session ->
-                        SessionRow(session) { ctx.openSession(session) }
-                    }
-                }
+                UnassignedSection(
+                    sessions = ctx.unassignedSessionList,
+                    expanded = ctx.unassignedExpanded,
+                    palette = ctx.palette,
+                    onToggle = { ctx.unassignedExpanded = !ctx.unassignedExpanded },
+                    onClick = { session -> ctx.openSession(session) },
+                )
             }
         }
     }
@@ -156,6 +159,14 @@ internal class WorkspaceSessionPager : WhalePager() {
         val assignedIds = workspaceList.flatMap { it.sessionIds }.toSet()
         unassignedSessionList.clear()
         unassignedSessionList.addAll(sessionList.filter { it.sessionId !in assignedIds })
+    }
+
+    private fun toggleWorkspace(workspaceId: String) {
+        expandedWorkspaceIds = if (workspaceId in expandedWorkspaceIds) {
+            expandedWorkspaceIds - workspaceId
+        } else {
+            expandedWorkspaceIds + workspaceId
+        }
     }
 
     private fun sessionsFor(workspace: WorkspaceUi): List<SessionSummaryUi> {
@@ -191,13 +202,18 @@ internal class WorkspaceSessionPager : WhalePager() {
 private fun ViewContainer<*, *>.WorkspaceSection(
     workspace: WorkspaceUi,
     sessions: List<SessionSummaryUi>,
+    expanded: Boolean,
+    palette: ThemePalette,
     onClick: (SessionSummaryUi) -> Unit,
     onNewSession: () -> Unit,
+    onToggle: () -> Unit,
 ) {
     View {
         attr {
-            marginTop(8f)
-            paddingBottom(6f)
+            margin(top = 6f, bottom = 4f)
+            padding(all = 10f)
+            borderRadius(8f)
+            backgroundColor(palette.surface)
         }
         View {
             attr {
@@ -205,18 +221,19 @@ private fun ViewContainer<*, *>.WorkspaceSection(
             }
             Text {
                 attr {
-                    text(workspace.title.ifEmpty { workspace.path })
+                    text("${if (expanded) "收起" else "展开"}  ·  ${workspace.title.ifEmpty { workspace.path }}")
                     fontSize(15f)
                     fontWeightBold()
                     flex(1f)
-                    color(Color(0xFF1B5E20))
+                    color(palette.success)
                 }
+                event { click { onToggle() } }
             }
             Button {
                 attr {
                     size(96f, 30f)
                     borderRadius(6f)
-                    backgroundColor(Color(0xFF4CAF50))
+                    backgroundColor(palette.success)
                     titleAttr {
                         text("新建会话")
                         fontSize(12f)
@@ -226,43 +243,89 @@ private fun ViewContainer<*, *>.WorkspaceSection(
                 event { click { onNewSession() } }
             }
         }
-        Text {
+        View {
             attr {
-                text(workspace.path)
-                fontSize(11f)
-                marginTop(2f)
-                color(Color(0xFF888888))
+                marginTop(3f)
             }
-        }
-        if (sessions.isEmpty()) {
             Text {
                 attr {
-                    text("暂无会话")
-                    fontSize(12f)
-                    marginTop(5f)
-                    color(Color(0xFF999999))
+                    text("${sessions.size} 个会话  ·  ${workspace.path}")
+                    fontSize(11f)
+                    color(palette.textMuted)
                 }
             }
-        } else {
-            sessions.forEach { session -> SessionRow(session) { onClick(session) } }
+        }
+        vif({ expanded }) {
+            if (sessions.isEmpty()) {
+                Text {
+                    attr {
+                        text("暂无会话")
+                        fontSize(12f)
+                        marginTop(7f)
+                        color(palette.textMuted)
+                    }
+                }
+            } else {
+                sessions.forEach { session -> SessionRow(session, palette) { onClick(session) } }
+            }
         }
     }
 }
 
-private fun ViewContainer<*, *>.SessionRow(session: SessionSummaryUi, onClick: () -> Unit) {
+private fun ViewContainer<*, *>.UnassignedSection(
+    sessions: ObservableList<SessionSummaryUi>,
+    expanded: Boolean,
+    palette: ThemePalette,
+    onToggle: () -> Unit,
+    onClick: (SessionSummaryUi) -> Unit,
+) {
+    View {
+        attr {
+            margin(top = 8f, bottom = 4f)
+            padding(all = 10f)
+            borderRadius(8f)
+            backgroundColor(palette.surface)
+        }
+        Text {
+            attr {
+                text("${if (expanded) "收起" else "展开"}  ·  未分组会话  ·  ${sessions.size} 个")
+                fontSize(15f)
+                fontWeightBold()
+                color(palette.text)
+            }
+            event { click { onToggle() } }
+        }
+        vif({ expanded }) {
+            if (sessions.isEmpty()) {
+                Text {
+                    attr {
+                        text("暂无未分组会话")
+                        fontSize(12f)
+                        marginTop(7f)
+                        color(palette.textMuted)
+                    }
+                }
+            } else {
+                sessions.forEach { session -> SessionRow(session, palette) { onClick(session) } }
+            }
+        }
+    }
+}
+
+private fun ViewContainer<*, *>.SessionRow(session: SessionSummaryUi, palette: ThemePalette, onClick: () -> Unit) {
     View {
         attr {
             margin(top = 6f, bottom = 2f)
             padding(all = 10f)
             borderRadius(6f)
-            backgroundColor(Color(0xFFF5F7FA))
+            backgroundColor(palette.surfaceMuted)
         }
         Text {
             attr {
                 text(session.title.ifEmpty { session.sessionId })
                 fontSize(14f)
                 fontWeightBold()
-                color(Color(0xFF222222))
+                color(palette.text)
             }
         }
         Text {
@@ -270,7 +333,7 @@ private fun ViewContainer<*, *>.SessionRow(session: SessionSummaryUi, onClick: (
                 text(if (session.lastMessage.isEmpty()) "暂无消息" else session.lastMessage)
                 fontSize(12f)
                 marginTop(3f)
-                color(Color(0xFF666666))
+                color(palette.textMuted)
             }
         }
         event { click { onClick() } }

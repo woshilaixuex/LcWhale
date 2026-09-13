@@ -96,6 +96,7 @@ internal class DSHClient {
      */
     fun sendRequest(code: String, payload: JSONObject?, onRes: (DSHRequestResult) -> Unit): String {
         val id = "r${++seq}"
+        println("[DSH_TRACE] send req id=$id code=$code payload=${payload?.toString()?.take(240)}")
         pending[id] = onRes
         sendFrame(DSHProtocol.req(id, code, payload))
         return id
@@ -179,6 +180,7 @@ internal class DSHClient {
 
     private fun dispatchRes(frame: JSONObject) {
         val id = frame.optString("id")
+        println("[DSH_TRACE] recv res id=$id ok=${frame.optBoolean("ok")} code=${frame.optString("code")}")
         val waiter = pending.remove(id) ?: return
         waiter(
             DSHRequestResult(
@@ -193,6 +195,8 @@ internal class DSHClient {
     private fun dispatchEvt(frame: JSONObject) {
         val push = frame.optString("push")
         val data = frame.optJSONObject("data") ?: return
+        val kind = data.optString("kind")
+        println("[DSH_TRACE] recv evt push=$push kind=$kind textLen=${data.optString("text").length}")
         topicListeners.toList().forEach { it(push, data) }
     }
 

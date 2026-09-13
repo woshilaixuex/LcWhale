@@ -9,15 +9,16 @@ import com.elyric.lcwhale.foundation.view.WhalePager
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
-import com.tencent.kuikly.core.base.ViewContainer
-import com.tencent.kuikly.core.directives.vfor
+import com.tencent.kuikly.core.base.ViewRef
 import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.reactive.collection.ObservableList
+import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.views.Input
-import com.tencent.kuikly.core.views.Scroller
+import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
+import com.tencent.kuikly.core.views.Scroller
+import com.tencent.kuikly.core.views.ScrollerView
 import com.tencent.kuikly.core.views.compose.Button
 
 /**
@@ -30,6 +31,10 @@ internal class ChatPager : WhalePager() {
     private var connText by observable("未连接")
     private var notice by observable("")
     private var titleText by observable("会话")
+    private var renderedMessages: ObservableList<ChatMessage> by observableList()
+    private var messageRefreshToken by observable(0)
+    private var messageContentHeight by observable(0f)
+    private var messageScrollerRef: ViewRef<ScrollerView<*, *>>? = null
 
     /** 会话模型(observable:就绪后触发消息列表重建)。 */
     private var chat: ChatSession? by observable(null)
@@ -38,7 +43,7 @@ internal class ChatPager : WhalePager() {
     private var requestedSessionId = ""
     private var pendingCwd = ""
 
-    private val emptyMessages = ObservableList<ChatMessage>()
+    private val viewModel = ChatViewModel()
 
     override fun created() {
         super.created()
@@ -51,6 +56,7 @@ internal class ChatPager : WhalePager() {
         }
 
         bindEngineHooks()
+        viewModel.onChanged = { syncRenderedMessages() }
         connText = connLabel(engine.state.connectState)
 
         if (engine.state.connectState == ConnectState.CONNECTED) {
@@ -71,6 +77,10 @@ internal class ChatPager : WhalePager() {
     override fun body(): ViewBuilder {
         val ctx = this
         return {
+            attr {
+                backgroundColor(ctx.palette.page)
+            }
+
             RouterNavBar {
                 attr {
                     title = ctx.titleText
@@ -83,7 +93,7 @@ internal class ChatPager : WhalePager() {
                     text(ctx.connText)
                     fontSize(12f)
                     marginLeft(10f)
-                    color(if (ctx.engine.isConnected()) Color(0xFF4CAF50) else Color(0xFF9E9E9E))
+                    color(if (ctx.engine.isConnected()) ctx.palette.success else ctx.palette.textMuted)
                 }
             }
 
@@ -93,102 +103,73 @@ internal class ChatPager : WhalePager() {
                         text(ctx.notice)
                         fontSize(12f)
                         marginLeft(10f)
-                        color(Color(0xFFFF9800))
+                        color(ctx.palette.warning)
                     }
                 }
             }
 
-            // 思考区(可折叠为纯文本展示)
-            vif({ (ctx.chat?.reasoningText ?: "").isNotEmpty() }) {
-                View {
-                    attr {
-                        marginLeft(10f)
-                        marginRight(10f)
-                        marginTop(6f)
-                        padding(all = 8f)
-                        borderRadius(6f)
-                        backgroundColor(Color(0xFFF3F0F5))
-                    }
-                    Text {
-                        attr {
-                            text("思考")
-                            fontSize(11f)
-                            color(Color(0xFF9C27B0))
-                        }
-                    }
-                    Text {
-                        attr {
-                            text(ctx.chat?.reasoningText ?: "")
-                            fontSize(12f)
-                            marginTop(2f)
-                            color(Color(0xFF666666))
-                        }
-                    }
-                }
-            }
-            vif({ (ctx.chat?.todoText ?: "").isNotEmpty() }) {
-                Text {
-                    attr {
-                        text(ctx.chat?.todoText ?: "")
-                        fontSize(12f)
-                        marginLeft(10f)
-                        marginTop(4f)
-                        color(Color(0xFF666666))
-                    }
-                }
-            }
-            vif({ (ctx.chat?.planText ?: "").isNotEmpty() }) {
-                Text {
-                    attr {
-                        text(ctx.chat?.planText ?: "")
-                        fontSize(12f)
-                        marginLeft(10f)
-                        marginTop(4f)
-                        color(Color(0xFF2196F3))
-                    }
-                }
-            }
-            vif({ (ctx.chat?.toolSummary ?: "").isNotEmpty() }) {
-                Text {
-                    attr {
-                        text(ctx.chat?.toolSummary ?: "")
-                        fontSize(12f)
-                        marginLeft(10f)
-                        marginTop(4f)
-                        color(Color(0xFF666666))
-                    }
-                }
-            }
-
-            // 消息区
             Scroller {
-                attr {
-                    flex(1f)
-                    padding(all = 10f)
-                }
-                vfor({ ctx.chat?.messages ?: ctx.emptyMessages }) { message ->
-                    MessageBubble(message)
-                }
-            }
-
-            // 状态行(运行状态 / 错误)
-            Text {
-                attr {
-                    text(turnLabel(ctx.chat?.turnState ?: RunState.IDLE))
-                    fontSize(12f)
-                    marginLeft(10f)
-                    color(Color(0xFF2196F3))
-                }
-            }
-            vif({ (ctx.chat?.error ?: "").isNotEmpty() }) {
-                Text {
-                    attr {
-                        text(ctx.chat?.error ?: "")
-                        fontSize(12f)
-                        marginLeft(10f)
-                        color(Color(0xFFF44336))
+                ref { ctx.messageScrollerRef = it }
+                attr { flex(1f); padding(all = 10f) }
+                event {
+                    contentSizeChanged { _, height ->
+                        ctx.messageContentHeight = height
+                        ctx.scrollMessagesToLatest()
                     }
                 }
+                // One scroll container owns the complete turn: reasoning, tools,
+                // user input and streamed assistant output stay together.
+                vif({ ctx.chat?.turnState == RunState.RUNNING }) {
+                    Text { attr { text("AI 正在思考…"); fontSize(12f); marginLeft(2f); color(ctx.palette.textMuted) } }
+                }
+                vfor({ ctx.renderedMessages }) { message ->
+                    View {
+                        attr {
+                            margin(all = 6f)
+                            padding(all = 10f)
+                            borderRadius(8f)
+                            backgroundColor(
+                                when (message.role) {
+                                    "user" -> ctx.palette.userBubble
+                                    "reasoning", "tool", "system", "context" -> ctx.palette.surfaceMuted
+                                    else -> ctx.palette.assistantBubble
+                                }
+                            )
+                        }
+                        Text {
+                            attr {
+                                text(
+                                    when (message.role) {
+                                        "user" -> "我"
+                                        "reasoning" -> "思考过程"
+                                        "tool" -> "工具调用"
+                                        "system" -> "系统"
+                                        "context" -> "上下文"
+                                        else -> "DSH"
+                                    }
+                                )
+                                fontSize(11f)
+                                color(if (message.role == "tool") ctx.palette.accent else ctx.palette.textMuted)
+                            }
+                        }
+                        if (message.role == "assistant") {
+                            AiMarkdownContent(message.text, ctx.palette)
+                        } else {
+                            Text {
+                                attr {
+                                    text(message.text)
+                                    fontSize(if (message.role == "reasoning" || message.role == "tool") 12f else 14f)
+                                    marginTop(2f)
+                                    color(if (message.role == "reasoning" || message.role == "tool") ctx.palette.textMuted else ctx.palette.text)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Text { attr { text(turnLabel(ctx.chat?.turnState ?: RunState.IDLE)); fontSize(12f); marginLeft(12f); color(ctx.palette.accent) } }
+            vif({ (ctx.chat?.error ?: "").isNotEmpty() }) {
+                Text { attr { text(ctx.chat?.error ?: ""); fontSize(12f); marginLeft(12f); color(ctx.palette.error) } }
             }
 
             // 权限审批卡片
@@ -200,14 +181,14 @@ internal class ChatPager : WhalePager() {
                         marginTop(8f)
                         padding(all = 10f)
                         borderRadius(8f)
-                        backgroundColor(Color(0xFFFFF3E0))
+                        backgroundColor(ctx.palette.surfaceMuted)
                     }
                     Text {
                         attr {
                             text("权限申请")
                             fontSize(12f)
                             fontWeightBold()
-                            color(Color(0xFFE65100))
+                            color(ctx.palette.warning)
                         }
                     }
                     Text {
@@ -215,7 +196,7 @@ internal class ChatPager : WhalePager() {
                             text(ctx.chat?.pendingApproval?.toolName ?: "")
                             fontSize(13f)
                             marginTop(4f)
-                            color(Color(0xFF222222))
+                            color(ctx.palette.text)
                         }
                     }
                     vif({ (ctx.chat?.pendingApproval?.reason ?: "").isNotEmpty() }) {
@@ -224,7 +205,7 @@ internal class ChatPager : WhalePager() {
                                 text(ctx.chat?.pendingApproval?.reason ?: "")
                                 fontSize(12f)
                                 marginTop(2f)
-                                color(Color(0xFF666666))
+                                color(ctx.palette.textMuted)
                             }
                         }
                     }
@@ -237,7 +218,7 @@ internal class ChatPager : WhalePager() {
                             attr {
                                 size(72f, 30f)
                                 borderRadius(15f)
-                                backgroundColor(Color(0xFF4CAF50))
+                                backgroundColor(ctx.palette.success)
                                 titleAttr {
                                     text("允许")
                                     fontSize(13f)
@@ -253,7 +234,7 @@ internal class ChatPager : WhalePager() {
                                 size(72f, 30f)
                                 borderRadius(15f)
                                 marginLeft(8f)
-                                backgroundColor(Color(0xFFF44336))
+                                backgroundColor(ctx.palette.error)
                                 titleAttr {
                                     text("拒绝")
                                     fontSize(13f)
@@ -268,60 +249,7 @@ internal class ChatPager : WhalePager() {
                 }
             }
 
-            // 输入栏
-            View {
-                attr {
-                    padding(all = 10f)
-                    flexDirectionRow()
-                }
-                Input {
-                    attr {
-                        flex(1f)
-                        height(38f)
-                        fontSize(14f)
-                        color(Color(0xFF333333))
-                        placeholder("输入消息")
-                        placeholderColor(Color(0xFFAAAAAA))
-                    }
-                    event {
-                        textDidChange { ctx.promptInput = it.text }
-                    }
-                }
-                vif({ ctx.chat?.turnState == RunState.RUNNING }) {
-                    Button {
-                        attr {
-                            size(72f, 38f)
-                            borderRadius(6f)
-                            marginLeft(8f)
-                            backgroundColor(Color(0xFFF44336))
-                            titleAttr {
-                                text("停止")
-                                fontSize(14f)
-                                color(Color.WHITE)
-                            }
-                        }
-                        event {
-                            click { ctx.stopTurn() }
-                        }
-                    }
-                }
-                Button {
-                    attr {
-                        size(72f, 38f)
-                        borderRadius(6f)
-                        marginLeft(8f)
-                        backgroundColor(Color(0xFF4CAF50))
-                        titleAttr {
-                            text("发送")
-                            fontSize(14f)
-                            color(Color.WHITE)
-                        }
-                    }
-                    event {
-                        click { ctx.send() }
-                    }
-                }
-            }
+            ChatInputBar(ctx.promptInput, ctx.chat?.turnState == RunState.RUNNING, { value -> ctx.promptInput = value }, { ctx.stopTurn() }, { ctx.send() }, ctx.palette)
         }
     }
 
@@ -356,29 +284,53 @@ internal class ChatPager : WhalePager() {
 
     private fun adoptSession(session: ChatSession) {
         chat = session
+        viewModel.bind(session)
+        syncRenderedMessages()
         if (session.title.isNotEmpty()) {
             titleText = session.title
         }
         engine.loadHistory(session.sessionId)
     }
 
-    private fun send() {
+    private fun send(): Boolean {
         val session = chat
         if (session == null) {
             notice = "会话尚未就绪"
-            return
+            return false
         }
         if (promptInput.isEmpty()) {
             notice = "请输入内容"
-            return
+            return false
         }
-        if (!engine.send(session.sessionId, promptInput)) return
+        val outgoing = promptInput
+        if (!engine.send(session.sessionId, outgoing)) return false
+        // Keep the UI responsive even if the host echoes session.user-message late.
+        viewModel.addUserMessage(outgoing)
         promptInput = ""
         notice = ""
+        return true
     }
 
     private fun stopTurn() {
         chat?.let { engine.stopSession(it.sessionId) }
+    }
+
+    private fun syncRenderedMessages() {
+        renderedMessages.clear()
+        renderedMessages.addAll(viewModel.messages)
+        messageRefreshToken += 1
+        println("[DSH_TRACE] pager.render messages=${renderedMessages.size} token=$messageRefreshToken")
+        // Content size is reported after layout; the callback above performs the
+        // final positioning once the new message heights are known.
+        scrollMessagesToLatest()
+    }
+
+    private fun scrollMessagesToLatest() {
+        val scroller = messageScrollerRef?.view ?: return
+        val viewportHeight = scroller.frame.height
+        if (viewportHeight <= 0f || messageContentHeight <= 0f) return
+        val bottomOffset = (messageContentHeight - viewportHeight).coerceAtLeast(0f)
+        scroller.setContentOffset(0f, bottomOffset, animated = false)
     }
 
     private fun respondApproval(allow: Boolean) {
@@ -402,32 +354,4 @@ private fun turnLabel(state: RunState): String = when (state) {
     RunState.DONE -> "完成"
     RunState.STOPPED -> "已停止"
     RunState.FAILED -> "失败"
-}
-
-private fun ViewContainer<*, *>.MessageBubble(message: ChatMessage) {
-    View {
-        attr {
-            margin(all = 6f)
-            padding(all = 10f)
-            borderRadius(8f)
-            backgroundColor(
-                if (message.role == "user") Color(0xFFE3F2FD) else Color(0xFFF1F1F1)
-            )
-        }
-        Text {
-            attr {
-                text(if (message.role == "user") "我" else "DSH")
-                fontSize(11f)
-                color(Color(0xFF999999))
-            }
-        }
-        Text {
-            attr {
-                text(message.text)
-                fontSize(14f)
-                marginTop(2f)
-                color(Color(0xFF222222))
-            }
-        }
-    }
 }

@@ -12,6 +12,7 @@ import com.tencent.kuikly.core.views.compose.Button
 import com.tencent.kuikly.core.reactive.handler.*
 import com.elyric.lcwhale.base.BasePager
 import com.elyric.lcwhale.base.bridgeModule
+import com.elyric.lcwhale.foundation.theme.AppThemeState
 
 @Page("router", supportInLocal = true)
 internal class RouterPage : BasePager() {
@@ -23,7 +24,7 @@ internal class RouterPage : BasePager() {
         val ctx = this
         return {
             attr {
-                backgroundColor(Color.WHITE)
+                backgroundColor(AppThemeState.palette.page)
             }
             // 背景图
             RouterNavBar {
@@ -40,7 +41,7 @@ internal class RouterPage : BasePager() {
                 }
                 View {
                     attr {
-                        backgroundColor(Color.WHITE)
+                        backgroundColor(AppThemeState.palette.surface)
                         borderRadius(10f)
                         padding(10f)
                     }
@@ -78,7 +79,7 @@ internal class RouterPage : BasePager() {
                         View {
                             attr {
                                 absolutePosition(top = 1f, left = 1f, right = 1f, bottom = 1f)
-                                backgroundColor(Color.WHITE)
+                                backgroundColor(AppThemeState.palette.surface)
                                 borderRadius(5f)
                             }
                         }
@@ -90,12 +91,12 @@ internal class RouterPage : BasePager() {
                         attr {
                             flex(1f)
                             fontSize(15f)
-                            color(Color(0xFFAD37FE))
+                            color(AppThemeState.palette.accent)
                             marginLeft(10f)
                             marginRight(10f)
                             placeholder(PLACEHOLDER)
                             autofocus(true)
-                            placeholderColor(Color(0xAA23D3FD))
+                            placeholderColor(AppThemeState.palette.textMuted)
 
                         }
                         event {
@@ -263,7 +264,7 @@ internal class RouterNavigationBar : ComposeView<RouterNavigationBarAttr, Compos
             View {
                 attr {
                     paddingTop(ctx.pagerData.statusBarHeight)
-                    backgroundColor(Color.WHITE)
+                    backgroundColor(AppThemeState.palette.surface)
                 }
                 // nav bar
                 View {
@@ -277,11 +278,7 @@ internal class RouterNavigationBar : ComposeView<RouterNavigationBarAttr, Compos
                             text(ctx.attr.title)
                             fontSize(17f)
                             fontWeightSemisolid()
-                            backgroundLinearGradient(
-                                Direction.TO_BOTTOM,
-                                ColorStop(Color(0xFF23D3FD), 0f),
-                                ColorStop(Color(0xFFAD37FE), 1f)
-                            )
+                            color(AppThemeState.palette.text)
 
                         }
                     }

@@ -6,6 +6,8 @@ import com.elyric.lcwhale.dsh.DSHEngine
 import com.elyric.lcwhale.foundation.module.DSHWebSocketModule
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.module.Module
+import com.tencent.kuikly.core.module.SharedPreferencesModule
+import com.elyric.lcwhale.foundation.theme.*
 
 /**
  * 持有链接的Pager，业务Pager全部继承这个类
@@ -14,6 +16,18 @@ import com.tencent.kuikly.core.module.Module
  * 本类只负责把当前页面的传输模块 attach 给引擎(原生侧同 URL 幂等,只切事件回调不重连)。
  */
 internal abstract class WhalePager : BasePager() {
+
+    protected val palette: ThemePalette
+        get() = AppThemeState.palette
+
+    protected fun currentThemeMode(): ThemeMode = ThemeMode.from(
+        acquireModule<SharedPreferencesModule>(SharedPreferencesModule.MODULE_NAME).getItem(THEME_MODE_KEY)
+    )
+
+    protected fun setThemeMode(mode: ThemeMode) {
+        AppThemeState.mode = mode
+        acquireModule<SharedPreferencesModule>(SharedPreferencesModule.MODULE_NAME).setItem(THEME_MODE_KEY, mode.value)
+    }
 
     private val webSocketModule = DSHWebSocketModule()
 
@@ -28,7 +42,17 @@ internal abstract class WhalePager : BasePager() {
 
     override fun created() {
         super.created()
+        AppThemeState.systemDark = super.isNightMode()
+        if (!AppThemeState.initialized) {
+            AppThemeState.mode = currentThemeMode()
+            AppThemeState.initialized = true
+        }
         engine.attach(webSocketModule)
+    }
+
+    override fun themeDidChanged(data: com.tencent.kuikly.core.nvi.serialization.json.JSONObject) {
+        super.themeDidChanged(data)
+        AppThemeState.systemDark = data.optBoolean(IS_NIGHT_MODE_KEY)
     }
 
     override fun pageDidAppear() {
