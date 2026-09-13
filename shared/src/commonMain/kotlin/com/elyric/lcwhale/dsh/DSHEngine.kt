@@ -103,7 +103,13 @@ internal class RunSession(val prompt: String, val chunks: Boolean) : BaseObject(
         toolSummary = lines.joinToString("\n")
     }
 
-    private fun stepKey(data: JSONObject): String = "${data.optInt("turn")}:${data.optInt("step")}"
+    private fun stepKey(data: JSONObject): String {
+        // Missing turn/step is common for non-streaming assistant.message
+        // events. Never collapse those events into the synthetic 0:0 key.
+        val hasTurn = data.has("turn")
+        val hasStep = data.has("step")
+        return if (hasTurn || hasStep) "${data.optInt("turn")}:${data.optInt("step")}" else ""
+    }
 }
 
 /**
@@ -235,7 +241,7 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
     fun replaceAllHistory(history: JSONArray?) {
         // A successful response may omit history in some plugin versions.
         // Preserve live and optimistic messages instead of clearing them.
-        if (history == null) return
+        if (history == null || (history.length() == 0 && messages.isNotEmpty())) return
         streamingMessage = null
         streamingReasoningMessage = null
         messages.clear()
@@ -286,30 +292,91 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
     }
 
     private fun onAssistantMessage(data: JSONObject) {
-        if (streamedSteps.contains(stepKey(data))) {
+        val text = assistantText(data)
+        println("[DSH_TRACE] assistant.message textLen=${text.length} key=${stepKey(data)} raw=$data")
+        val key = stepKey(data)
+        // Only suppress the final event when the same turn/step really had
+        // text deltas. An empty/missing key must never hide a full response.
+        if (text.isNotEmpty() && key.isNotEmpty() && streamedSteps.contains(key)) {
             // 该 turn:step 已用增量流出正文,最终 message 不再重复
             streamingMessage = null
             return
         }
+        // Some host versions emit the final assistant.message without text
+        // after already sending text-delta chunks. Keep the streamed message.
+        if (text.isEmpty() && streamingMessage?.text?.isNotEmpty() == true) return
         streamingMessage = null
-        appendMessage("assistant", data.optString("text"))
+        appendMessage("assistant", text)
+    }
+
+    /** Accept both wire forms used by dsh-connect versions. */
+    private fun assistantText(data: JSONObject): String {
+        val direct = data.optString("text")
+        if (direct.isNotEmpty()) return direct
+        val content = data.optString("content")
+        if (content.isNotEmpty()) return content
+        val message = data.optJSONObject("message")
+        if (message == null) {
+            // A few bridge builds put the content blocks directly under
+            // `message` as an array rather than an object.
+            return textBlocks(data.optJSONArray("content"))
+        }
+        val messageText = message.optString("text")
+        if (messageText.isNotEmpty()) return messageText
+        val messageContent = message.optString("content")
+        if (messageContent.isNotEmpty()) return messageContent
+        return textBlocks(message.optJSONArray("content"))
+    }
+
+    private fun textBlocks(content: JSONArray?): String {
+        if (content == null) return ""
+        val parts = mutableListOf<String>()
+        for (index in 0 until content.length()) {
+            val block = content.optJSONObject(index) ?: continue
+            val type = block.optString("type")
+            // dsh-connect versions use text, output_text, and plain blocks.
+            // Reasoning is rendered separately and must not become正文.
+            if (type != "reasoning" && type != "reasoning-delta") {
+                val value = block.optString("text")
+                if (value.isNotEmpty()) parts.add(value)
+                else {
+                    val nested = block.optJSONArray("content")
+                    if (nested != null) parts.add(textBlocks(nested))
+                }
+            }
+        }
+        return parts.joinToString("")
     }
 
     private fun onAssistantChunk(data: JSONObject) {
         if (turnState == RunState.IDLE) turnState = RunState.RUNNING
-        val chunk = data.optJSONObject("chunk") ?: return
-        when (chunk.optString("type")) {
-            DSHProtocol.CHUNK_TEXT_DELTA -> {
-                streamedSteps.add(stepKey(data))
+        val chunk = data.optJSONObject("chunk") ?: data
+        val type = chunk.optString("type")
+        if (type == DSHProtocol.CHUNK_REASONING_DELTA) return
+        // Host versions have used text-delta and plain text blocks here. Any
+        // non-empty textual chunk is valid assistant output.
+        val delta = chunkText(chunk)
+        if (delta.isNotEmpty()) {
+                val key = stepKey(data)
+                if (key.isNotEmpty()) streamedSteps.add(key)
                 val target = streamingMessage ?: ChatMessage("assistant").also {
                     messages.add(it)
                 streamingMessage = it
-            }
-                target.text += chunk.optString("text")
+                }
+                target.text += delta
                 onMessagesChanged?.invoke()
-            }
-            else -> Unit // reasoning-delta / tool-call-delta / block-* / usage / finish / 未知:忽略
         }
+    }
+
+    private fun chunkText(chunk: JSONObject): String {
+        val direct = chunk.optString("text")
+        if (direct.isNotEmpty()) return direct
+        val delta = chunk.optString("delta")
+        if (delta.isNotEmpty()) return delta
+        val content = chunk.optString("content")
+        if (content.isNotEmpty()) return content
+        val blocks = chunk.optJSONArray("content")
+        return textBlocks(blocks)
     }
 
     private fun onToolCall(data: JSONObject) {
@@ -398,7 +465,11 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
         toolSummary = lines.joinToString("\n")
     }
 
-    private fun stepKey(data: JSONObject): String = "${data.optInt("turn")}:${data.optInt("step")}"
+    private fun stepKey(data: JSONObject): String {
+        val hasTurn = data.has("turn")
+        val hasStep = data.has("step")
+        return if (hasTurn || hasStep) "${data.optInt("turn")}:${data.optInt("step")}" else ""
+    }
 }
 
 /**

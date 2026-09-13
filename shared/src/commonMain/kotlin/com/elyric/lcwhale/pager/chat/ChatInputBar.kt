@@ -17,11 +17,19 @@ internal fun ViewContainer<*, *>.ChatInputBar(
     onChange: (String) -> Unit,
     onStop: () -> Unit,
     onSend: () -> Boolean,
+    onKeyboardDismiss: () -> Unit = {},
     palette: ThemePalette,
 ) {
     lateinit var inputRef: ViewRef<InputView>
     View {
-        attr { padding(all = 10f); marginLeft(4f); marginRight(4f); flexDirectionRow(); backgroundColor(palette.input); borderRadius(18f) }
+        attr {
+            padding(top = 10f, bottom = 14f, left = 10f, right = 10f)
+            marginLeft(4f)
+            marginRight(4f)
+            flexDirectionRow()
+            backgroundColor(palette.input)
+            borderRadius(18f)
+        }
         Button { attr { size(32f, 32f); borderRadius(16f); backgroundColor(palette.surfaceMuted); titleAttr { text("+"); fontSize(22f); color(palette.textMuted) } } }
         Input {
             ref { inputRef = it }
@@ -31,6 +39,16 @@ internal fun ViewContainer<*, *>.ChatInputBar(
         vif({ running }) {
             Button { attr { size(32f, 32f); borderRadius(16f); marginLeft(6f); backgroundColor(palette.error); titleAttr { text("■"); fontSize(13f); color(Color.WHITE) } }; event { click { onStop() } } }
         }
-        Button { attr { size(32f, 32f); borderRadius(16f); marginLeft(6f); backgroundColor(palette.accent); titleAttr { text("→"); fontSize(18f); color(Color.WHITE) } }; event { click { if (onSend()) inputRef.view?.setText("") } } }
+        Button {
+            attr { size(32f, 32f); borderRadius(16f); marginLeft(6f); backgroundColor(palette.accent); titleAttr { text("→"); fontSize(18f); color(Color.WHITE) } }
+            event {
+                click {
+                    if (onSend()) {
+                        inputRef.view?.setText("")
+                        onKeyboardDismiss()
+                    }
+                }
+            }
+        }
     }
 }

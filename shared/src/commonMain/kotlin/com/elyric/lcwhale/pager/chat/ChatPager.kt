@@ -41,9 +41,6 @@ internal class ChatPager : WhalePager() {
     private var messageContentHeight by observable(0f)
     private var messageScrollerRef: ViewRef<ScrollerView<*, *>>? = null
     private var renderScheduled = false
-    private val displaySources = mutableMapOf<ChatMessage, ChatMessage>()
-    private val streamTargets = mutableMapOf<ChatMessage, String>()
-    private val streamRunning = mutableSetOf<ChatMessage>()
     private val selectionRefs = mutableMapOf<ChatMessage, ViewRef<DivView>>()
     private var selectedMessage by observable<ChatMessage?>(null)
     private var selectedText by observable("")
@@ -103,12 +100,46 @@ internal class ChatPager : WhalePager() {
                 }
             }
 
-            Text {
+            // Keep connection status directly below the title and align the
+            // turn status/export action on the same row for quick scanning.
+            View {
                 attr {
-                    text(ctx.connText)
-                    fontSize(12f)
-                    marginLeft(10f)
-                    color(if (ctx.engine.isConnected()) ctx.palette.success else ctx.palette.textMuted)
+                    flexDirectionRow()
+                    marginLeft(12f)
+                    marginRight(12f)
+                    marginTop(2f)
+                    marginBottom(4f)
+                }
+                Text {
+                    attr {
+                        text(ctx.connText)
+                        fontSize(12f)
+                        color(if (ctx.engine.isConnected()) ctx.palette.success else ctx.palette.textMuted)
+                    }
+                }
+                View { attr { flex(1f) } }
+                Text {
+                    attr {
+                        text(turnLabel(ctx.chat?.turnState ?: RunState.IDLE))
+                        fontSize(12f)
+                        color(ctx.palette.accent)
+                    }
+                }
+                Button {
+                    attr {
+                        height(26f)
+                        padding(left = 9f, right = 9f)
+                        marginLeft(8f)
+                        borderRadius(5f)
+                        backgroundColor(ctx.palette.surfaceMuted)
+                        titleAttr { text("导出会话"); fontSize(11f); color(ctx.palette.textMuted) }
+                    }
+                    event {
+                        click {
+                            ctx.bridgeModule.copyToPasteboard(ctx.viewModel.transcript)
+                            ctx.bridgeModule.toast("会话已导出")
+                        }
+                    }
                 }
             }
 
@@ -126,6 +157,10 @@ internal class ChatPager : WhalePager() {
             Scroller {
                 ref { ctx.messageScrollerRef = it }
                 attr { flex(1f); padding(all = 10f) }
+                // AiMarkdownContent parses blocks during render. Reading this
+                // observable token rebuilds rows when streamed text changes.
+                val refreshToken = ctx.messageRefreshToken
+                if (refreshToken < 0) return@Scroller
                 event {
                     contentSizeChanged { _, height ->
                         ctx.messageContentHeight = height
@@ -198,6 +233,7 @@ internal class ChatPager : WhalePager() {
                             if (message.role == "assistant") {
                                 AiMarkdownContent(message.text, ctx.palette) { code ->
                                     ctx.bridgeModule.copyToPasteboard(code)
+                                    ctx.bridgeModule.toast("代码已复制")
                                 }
                             } else {
                                 Text {
@@ -218,7 +254,12 @@ internal class ChatPager : WhalePager() {
                                     backgroundColor(ctx.palette.surfaceMuted)
                                     titleAttr { text("复制"); fontSize(11f); color(ctx.palette.textMuted) }
                                 }
-                                event { click { ctx.bridgeModule.copyToPasteboard(message.text) } }
+                                event {
+                                    click {
+                                        ctx.bridgeModule.copyToPasteboard(message.text)
+                                        ctx.bridgeModule.toast("已复制")
+                                    }
+                                }
                             }
                             vif({ ctx.selectedMessage === message && ctx.selectedText.isNotEmpty() }) {
                                 Button {
@@ -227,26 +268,18 @@ internal class ChatPager : WhalePager() {
                                         backgroundColor(ctx.palette.accent)
                                         titleAttr { text("复制选中"); fontSize(11f); color(Color.WHITE) }
                                     }
-                                    event { click { ctx.bridgeModule.copyToPasteboard(ctx.selectedText) } }
+                                    event {
+                                        click {
+                                            ctx.bridgeModule.copyToPasteboard(ctx.selectedText)
+                                            ctx.bridgeModule.toast("已复制选中内容")
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            View {
-                attr { flexDirectionRow(); marginLeft(12f); marginRight(12f); marginBottom(4f) }
-                View { attr { flex(1f) } }
-                Button {
-                    attr {
-                        height(26f); padding(left = 9f, right = 9f); borderRadius(5f)
-                        backgroundColor(ctx.palette.surfaceMuted)
-                        titleAttr { text("导出会话"); fontSize(11f); color(ctx.palette.textMuted) }
-                    }
-                    event { click { ctx.bridgeModule.copyToPasteboard(ctx.viewModel.transcript) } }
-                }
-            }
-            Text { attr { text(turnLabel(ctx.chat?.turnState ?: RunState.IDLE)); fontSize(12f); marginLeft(12f); color(ctx.palette.accent) } }
             vif({ (ctx.chat?.error ?: "").isNotEmpty() }) {
                 Text { attr { text(ctx.chat?.error ?: ""); fontSize(12f); marginLeft(12f); color(ctx.palette.error) } }
             }
@@ -403,53 +436,16 @@ internal class ChatPager : WhalePager() {
     }
 
     private fun syncRenderedMessages() {
-        val sourceMessages = viewModel.messages.toList()
-        while (renderedMessages.size > sourceMessages.size) renderedMessages.removeAt(renderedMessages.lastIndex)
-        sourceMessages.forEachIndexed { index, source ->
-            val display = if (index < renderedMessages.size && displaySources[source] === renderedMessages[index]) {
-                renderedMessages[index]
-            } else {
-                val created = ChatMessage(source.role)
-                displaySources[source] = created
-                if (index < renderedMessages.size) renderedMessages[index] = created else renderedMessages.add(created)
-                created
-            }
-            val shouldAnimate = source.role == "assistant" || source.role == "reasoning"
-            if (shouldAnimate && display.text.isEmpty() && source.text.isNotEmpty()) {
-                streamTargets[source] = source.text
-                animateMessage(source, display)
-            } else if (shouldAnimate && source.text.startsWith(display.text) && source.text.length > display.text.length) {
-                streamTargets[source] = source.text
-                animateMessage(source, display)
-            } else if (display.text != source.text) {
-                display.text = source.text
-                streamTargets.remove(source)
-            }
-        }
+        // Keep the exact observable message instances owned by the ViewModel.
+        // Creating proxy messages here breaks Kuikly dependency tracking: the
+        // row is first built with empty text and later mutations are invisible.
+        renderedMessages.clear()
+        renderedMessages.addAll(viewModel.messages)
         messageRefreshToken += 1
         println("[DSH_TRACE] pager.render messages=${renderedMessages.size} token=$messageRefreshToken")
         // Content size is reported after layout; the callback above performs the
         // final positioning once the new message heights are known.
         scrollMessagesToLatest()
-    }
-
-    /** Consume streamed text one character at a time without blocking protocol callbacks. */
-    private fun animateMessage(source: ChatMessage, display: ChatMessage) {
-        if (!streamRunning.add(source)) return
-        setTimeout(18) {
-            val target = streamTargets[source] ?: source.text
-            if (display.text.length < target.length && target.startsWith(display.text)) {
-                display.text += target[display.text.length]
-                streamRunning.remove(source)
-                animateMessage(source, display)
-                messageRefreshToken += 1
-            } else {
-                display.text = target
-                streamTargets.remove(source)
-                streamRunning.remove(source)
-                messageRefreshToken += 1
-            }
-        }
     }
 
     private fun scheduleRenderedMessages() {
