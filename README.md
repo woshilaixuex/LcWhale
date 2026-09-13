@@ -16,6 +16,12 @@
 |:---:|:---:|:---:|:---:|
 | ![Home and connection](docs/image/home-connection.jpg) | ![Task execution and reasoning](docs/image/task-execution-reasoning.jpg) | ![Multi-turn session](docs/image/multi-turn-session.jpg) | ![Approval](docs/image/approval.jpg) |
 
+### 演示视频
+
+点击封面播放完整演示：
+
+[![Watch the LcWhale demo](docs/image/home-connection.jpg)](https://github.com/woshilaixuex/LcWhale/releases/download/v0.1.0/demo.mp4)
+
 ## 这是什么
 
 LcWhale 是 dsh 的移动端与跨端操作界面。它不直接运行模型，而是连接局域网中已启动的 dsh-connect plugin；plugin 再将请求交给 deepseek-harness 的 dsh Agent，并把任务事件实时回传。
