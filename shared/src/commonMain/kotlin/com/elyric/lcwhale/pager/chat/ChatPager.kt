@@ -41,6 +41,9 @@ internal class ChatPager : WhalePager() {
     private var messageContentHeight by observable(0f)
     private var messageScrollerRef: ViewRef<ScrollerView<*, *>>? = null
     private var renderScheduled = false
+    private val displaySources = mutableMapOf<ChatMessage, ChatMessage>()
+    private val streamTargets = mutableMapOf<ChatMessage, String>()
+    private val streamRunning = mutableSetOf<ChatMessage>()
     private val selectionRefs = mutableMapOf<ChatMessage, ViewRef<DivView>>()
     private var selectedMessage by observable<ChatMessage?>(null)
     private var selectedText by observable("")
@@ -325,7 +328,15 @@ internal class ChatPager : WhalePager() {
                 }
             }
 
-            ChatInputBar(ctx.promptInput, ctx.chat?.turnState == RunState.RUNNING, { value -> ctx.promptInput = value }, { ctx.stopTurn() }, { ctx.send() }, ctx.palette)
+            ChatInputBar(
+                value = ctx.promptInput,
+                running = ctx.chat?.turnState == RunState.RUNNING,
+                onChange = { value -> ctx.promptInput = value },
+                onStop = { ctx.stopTurn() },
+                onSend = { ctx.send() },
+                onKeyboardDismiss = { ctx.bridgeModule.closeKeyboard() },
+                palette = ctx.palette,
+            )
         }
     }
 
@@ -392,13 +403,53 @@ internal class ChatPager : WhalePager() {
     }
 
     private fun syncRenderedMessages() {
-        renderedMessages.clear()
-        renderedMessages.addAll(viewModel.messages)
+        val sourceMessages = viewModel.messages.toList()
+        while (renderedMessages.size > sourceMessages.size) renderedMessages.removeAt(renderedMessages.lastIndex)
+        sourceMessages.forEachIndexed { index, source ->
+            val display = if (index < renderedMessages.size && displaySources[source] === renderedMessages[index]) {
+                renderedMessages[index]
+            } else {
+                val created = ChatMessage(source.role)
+                displaySources[source] = created
+                if (index < renderedMessages.size) renderedMessages[index] = created else renderedMessages.add(created)
+                created
+            }
+            val shouldAnimate = source.role == "assistant" || source.role == "reasoning"
+            if (shouldAnimate && display.text.isEmpty() && source.text.isNotEmpty()) {
+                streamTargets[source] = source.text
+                animateMessage(source, display)
+            } else if (shouldAnimate && source.text.startsWith(display.text) && source.text.length > display.text.length) {
+                streamTargets[source] = source.text
+                animateMessage(source, display)
+            } else if (display.text != source.text) {
+                display.text = source.text
+                streamTargets.remove(source)
+            }
+        }
         messageRefreshToken += 1
         println("[DSH_TRACE] pager.render messages=${renderedMessages.size} token=$messageRefreshToken")
         // Content size is reported after layout; the callback above performs the
         // final positioning once the new message heights are known.
         scrollMessagesToLatest()
+    }
+
+    /** Consume streamed text one character at a time without blocking protocol callbacks. */
+    private fun animateMessage(source: ChatMessage, display: ChatMessage) {
+        if (!streamRunning.add(source)) return
+        setTimeout(18) {
+            val target = streamTargets[source] ?: source.text
+            if (display.text.length < target.length && target.startsWith(display.text)) {
+                display.text += target[display.text.length]
+                streamRunning.remove(source)
+                animateMessage(source, display)
+                messageRefreshToken += 1
+            } else {
+                display.text = target
+                streamTargets.remove(source)
+                streamRunning.remove(source)
+                messageRefreshToken += 1
+            }
+        }
     }
 
     private fun scheduleRenderedMessages() {
