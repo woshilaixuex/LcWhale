@@ -19,8 +19,7 @@
 ### 演示视频
 
 点击封面播放完整演示：
-
-[![Watch the LcWhale demo](docs/image/home-connection.jpg)](https://github.com/woshilaixuex/LcWhale/releases/download/v0.1.0/demo.mp4)
+[![Watch the LcWhale demo](docs/image/home-connection.jpg)](https://github.com/woshilaixuex/LcWhale/releases/download/untagged-a5e39676fe2c0d88db71/demo.mp4)
 
 ## 这是什么
 
