@@ -5,6 +5,8 @@ import com.elyric.lcwhale.dsh.ChatMessage
 import com.elyric.lcwhale.dsh.ChatSession
 import com.elyric.lcwhale.dsh.ConnectState
 import com.elyric.lcwhale.dsh.RunState
+import com.elyric.lcwhale.base.bridgeModule
+import com.elyric.lcwhale.base.setTimeout
 import com.elyric.lcwhale.foundation.view.WhalePager
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
@@ -17,6 +19,9 @@ import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
+import com.tencent.kuikly.core.views.DivView
+import com.tencent.kuikly.core.views.SelectableOption
+import com.tencent.kuikly.core.views.SelectionType
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.ScrollerView
 import com.tencent.kuikly.core.views.compose.Button
@@ -35,6 +40,10 @@ internal class ChatPager : WhalePager() {
     private var messageRefreshToken by observable(0)
     private var messageContentHeight by observable(0f)
     private var messageScrollerRef: ViewRef<ScrollerView<*, *>>? = null
+    private var renderScheduled = false
+    private val selectionRefs = mutableMapOf<ChatMessage, ViewRef<DivView>>()
+    private var selectedMessage by observable<ChatMessage?>(null)
+    private var selectedText by observable("")
 
     /** 会话模型(observable:就绪后触发消息列表重建)。 */
     private var chat: ChatSession? by observable(null)
@@ -56,7 +65,10 @@ internal class ChatPager : WhalePager() {
         }
 
         bindEngineHooks()
-        viewModel.onChanged = { syncRenderedMessages() }
+        // Protocol events can arrive several times per frame while the assistant
+        // is streaming. Coalesce them into one layout pass to keep scrolling and
+        // Markdown measurement responsive.
+        viewModel.onChanged = { scheduleRenderedMessages() }
         connText = connLabel(engine.state.connectState)
 
         if (engine.state.connectState == ConnectState.CONNECTED) {
@@ -132,7 +144,7 @@ internal class ChatPager : WhalePager() {
                                 when (message.role) {
                                     "user" -> ctx.palette.userBubble
                                     "reasoning", "tool", "system", "context" -> ctx.palette.surfaceMuted
-                                    else -> ctx.palette.assistantBubble
+                                    else -> ctx.palette.page
                                 }
                             )
                         }
@@ -152,19 +164,83 @@ internal class ChatPager : WhalePager() {
                                 color(if (message.role == "tool") ctx.palette.accent else ctx.palette.textMuted)
                             }
                         }
-                        if (message.role == "assistant") {
-                            AiMarkdownContent(message.text, ctx.palette)
-                        } else {
-                            Text {
+                        View {
+                            ref { ctx.selectionRefs[message] = it }
+                            attr {
+                                selectable(SelectableOption.ENABLE)
+                                selectionColor(ctx.palette.accent)
+                            }
+                            event {
+                                longPress {
+                                    if (it.state == "start") {
+                                        ctx.selectionRefs[message]?.view?.createSelection(it.x, it.y, SelectionType.WORD)
+                                    }
+                                }
+                                selectEnd {
+                                    ctx.selectionRefs[message]?.view?.getSelection { result ->
+                                        val value = result.content.joinToString("").trim()
+                                        if (value.isNotEmpty()) {
+                                            ctx.selectedMessage = message
+                                            ctx.selectedText = value
+                                        }
+                                    }
+                                }
+                                selectCancel {
+                                    if (ctx.selectedMessage === message) {
+                                        ctx.selectedMessage = null
+                                        ctx.selectedText = ""
+                                    }
+                                }
+                            }
+                            if (message.role == "assistant") {
+                                AiMarkdownContent(message.text, ctx.palette) { code ->
+                                    ctx.bridgeModule.copyToPasteboard(code)
+                                }
+                            } else {
+                                Text {
+                                    attr {
+                                        text(message.text)
+                                        fontSize(if (message.role == "reasoning" || message.role == "tool") 12f else 14f)
+                                        marginTop(2f)
+                                        color(if (message.role == "reasoning" || message.role == "tool") ctx.palette.textMuted else ctx.palette.text)
+                                    }
+                                }
+                            }
+                        }
+                        View {
+                            attr { flexDirectionRow(); marginTop(6f) }
+                            Button {
                                 attr {
-                                    text(message.text)
-                                    fontSize(if (message.role == "reasoning" || message.role == "tool") 12f else 14f)
-                                    marginTop(2f)
-                                    color(if (message.role == "reasoning" || message.role == "tool") ctx.palette.textMuted else ctx.palette.text)
+                                    height(24f); padding(left = 8f, right = 8f); borderRadius(5f)
+                                    backgroundColor(ctx.palette.surfaceMuted)
+                                    titleAttr { text("复制"); fontSize(11f); color(ctx.palette.textMuted) }
+                                }
+                                event { click { ctx.bridgeModule.copyToPasteboard(message.text) } }
+                            }
+                            vif({ ctx.selectedMessage === message && ctx.selectedText.isNotEmpty() }) {
+                                Button {
+                                    attr {
+                                        height(24f); padding(left = 8f, right = 8f); marginLeft(6f); borderRadius(5f)
+                                        backgroundColor(ctx.palette.accent)
+                                        titleAttr { text("复制选中"); fontSize(11f); color(Color.WHITE) }
+                                    }
+                                    event { click { ctx.bridgeModule.copyToPasteboard(ctx.selectedText) } }
                                 }
                             }
                         }
                     }
+                }
+            }
+            View {
+                attr { flexDirectionRow(); marginLeft(12f); marginRight(12f); marginBottom(4f) }
+                View { attr { flex(1f) } }
+                Button {
+                    attr {
+                        height(26f); padding(left = 9f, right = 9f); borderRadius(5f)
+                        backgroundColor(ctx.palette.surfaceMuted)
+                        titleAttr { text("导出会话"); fontSize(11f); color(ctx.palette.textMuted) }
+                    }
+                    event { click { ctx.bridgeModule.copyToPasteboard(ctx.viewModel.transcript) } }
                 }
             }
             Text { attr { text(turnLabel(ctx.chat?.turnState ?: RunState.IDLE)); fontSize(12f); marginLeft(12f); color(ctx.palette.accent) } }
@@ -323,6 +399,15 @@ internal class ChatPager : WhalePager() {
         // Content size is reported after layout; the callback above performs the
         // final positioning once the new message heights are known.
         scrollMessagesToLatest()
+    }
+
+    private fun scheduleRenderedMessages() {
+        if (renderScheduled) return
+        renderScheduled = true
+        setTimeout(16) {
+            renderScheduled = false
+            syncRenderedMessages()
+        }
     }
 
     private fun scrollMessagesToLatest() {

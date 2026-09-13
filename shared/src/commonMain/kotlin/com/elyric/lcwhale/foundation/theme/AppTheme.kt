@@ -48,8 +48,28 @@ const val THEME_MODE_KEY = "lcwhale_theme_mode"
 object AppThemeState : BaseObject() {
     var mode: ThemeMode by observable(ThemeMode.SYSTEM)
     var systemDark: Boolean by observable(false)
+    var revision: Int by observable(0)
     var initialized = false
 
     val palette: ThemePalette
-        get() = if (mode == ThemeMode.DARK || mode == ThemeMode.SYSTEM && systemDark) ThemePalette.Dark else ThemePalette.Light
+        get() {
+            // Reading revision makes palette consumers observe theme changes even
+            // when they only access the computed palette value.
+            revision
+            return if (mode == ThemeMode.DARK || mode == ThemeMode.SYSTEM && systemDark) ThemePalette.Dark else ThemePalette.Light
+        }
+
+    fun updateMode(next: ThemeMode) {
+        if (mode != next) {
+            mode = next
+            revision += 1
+        }
+    }
+
+    fun updateSystemDark(next: Boolean) {
+        if (systemDark != next) {
+            systemDark = next
+            revision += 1
+        }
+    }
 }

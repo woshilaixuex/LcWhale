@@ -62,7 +62,7 @@ private fun turnLabel(state: RunState): String = when (state) {
 
 private fun ViewContainer<*, *>.MessageBubble(message: ChatMessage, palette: ThemePalette) {
     View {
-        attr { margin(all = 6f); padding(all = 10f); borderRadius(8f); backgroundColor(if (message.role == "user") palette.userBubble else palette.assistantBubble) }
+        attr { margin(all = 6f); padding(all = 10f); borderRadius(8f); backgroundColor(if (message.role == "user") palette.userBubble else palette.page) }
         Text { attr { text(if (message.role == "user") "我" else "DSH"); fontSize(11f); color(palette.textMuted) } }
         if (message.role == "assistant") {
             AiMarkdownContent(message.text, palette)

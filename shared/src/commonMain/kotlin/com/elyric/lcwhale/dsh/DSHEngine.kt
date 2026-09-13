@@ -328,7 +328,36 @@ internal class ChatSession(val sessionId: String, initialTitle: String) : BaseOb
         val ok = data.optBoolean("ok")
         finishedTools.add("• $name ${if (ok) "完成" else "失败"}")
         val resultText = data.optString("text").ifEmpty { if (ok) "完成" else data.optJSONObject("error")?.optString("message").orEmpty().ifEmpty { "失败" } }
-        appendMessage("tool", "$name  ·  ${if (ok) "完成" else "失败"}\n$resultText")
+        val details = data.optJSONObject("details")
+        val detailLines = mutableListOf<String>()
+        val fileName = details?.optString("fileName").orEmpty().ifEmpty { details?.optString("filename").orEmpty() }
+        val path = details?.optString("path").orEmpty()
+        val url = details?.optString("url").orEmpty().ifEmpty { details?.optString("reference").orEmpty() }
+        if (fileName.isNotEmpty()) detailLines.add("文件名：$fileName")
+        if (path.isNotEmpty()) detailLines.add("路径：$path")
+        if (url.isNotEmpty()) detailLines.add("地址：$url")
+        val attachmentNames = details?.optJSONArray("attachments")
+        if (attachmentNames != null) {
+            for (i in 0 until attachmentNames.length()) {
+                val item = attachmentNames.optJSONObject(i)
+                val attachment = item?.optString("fileName").orEmpty().ifEmpty { item?.optString("name").orEmpty() }
+                if (attachment.isNotEmpty()) detailLines.add("附件：$attachment")
+            }
+        }
+        val readable = buildString {
+            append(name.ifEmpty { "工具" })
+            append("  ·  ")
+            append(if (ok) "完成" else "失败")
+            if (detailLines.isNotEmpty()) {
+                append('\n')
+                append(detailLines.joinToString("\n"))
+            }
+            if (resultText.isNotEmpty()) {
+                append('\n')
+                append(resultText)
+            }
+        }
+        appendMessage("tool", readable)
         rebuildToolSummary()
     }
 
@@ -438,8 +467,8 @@ internal class DSHEngine(private val client: DSHClient) {
     }
 
     /** 页面销毁:让出事件通道,连接保持。 */
-    fun detach() {
-        client.detach()
+    fun detach(module: DSHWebSocketModule) {
+        client.detach(module)
     }
 
     fun connect(rawUrl: String) {
@@ -568,13 +597,19 @@ internal class DSHEngine(private val client: DSHClient) {
     }
 
     /** session.list。 */
-    fun listSessions(includeDeleted: Boolean = false, onResult: (List<SessionSummaryUi>) -> Unit) {
+    fun listSessions(
+        includeDeleted: Boolean = false,
+        limit: Int = 1000,
+        onResult: (List<SessionSummaryUi>) -> Unit,
+    ) {
         if (!isConnected()) {
             onNotice?.invoke("未连接,无法获取会话列表")
             onResult(emptyList())
             return
         }
         val payload = JSONObject()
+        payload.put("limit", limit)
+        payload.put("offset", 0)
         if (includeDeleted) {
             payload.put("includeDeleted", true)
         }
@@ -603,6 +638,7 @@ internal class DSHEngine(private val client: DSHClient) {
                     )
                 }
             }
+            println("[DSH_TRACE] session.list received array=${array?.length() ?: -1} parsed=${result.size}")
             onResult(result)
         }
     }
@@ -738,6 +774,10 @@ internal class DSHEngine(private val client: DSHClient) {
                     )
                 }
             }
+            println(
+                "[DSH_TRACE] workspace.list received array=${array?.length() ?: -1} " +
+                    "parsed=${result.size} linkedSessions=${result.sumOf { it.sessionIds.size }}"
+            )
             onResult(result)
         }
     }

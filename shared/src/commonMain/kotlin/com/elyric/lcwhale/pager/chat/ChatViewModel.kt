@@ -42,17 +42,23 @@ internal class ChatViewModel : BaseObject() {
 
     private fun sync() {
         val source = boundSession?.messages ?: return
-        messages.clear()
-        messages.addAll(source)
+        // Keep stable ChatMessage instances so vfor can update only the changed
+        // streaming item instead of rebuilding every row on each token.
+        var common = 0
+        while (common < messages.size && common < source.size && messages[common] === source[common]) {
+            common += 1
+        }
+        while (messages.size > common) messages.removeAt(messages.lastIndex)
+        for (index in common until source.size) messages.add(source[index])
         rebuildTranscript()
         println("[DSH_TRACE] vm.sync messages=${messages.size} transcriptLen=${transcript.length}")
         onChanged?.invoke()
     }
 
     private fun rebuildTranscript() {
-        transcript = messages.joinToString("\n\n") { message ->
-            val author = if (message.role == "user") "我" else "DSH"
-            "$author\n${message.text}"
-        }
+        transcript = messages
+            .map { it.text.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString("\n\n")
     }
 }

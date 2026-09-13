@@ -2,12 +2,11 @@ package com.elyric.lcwhale.pager.home
 
 import com.elyric.lcwhale.RouterNavBar
 import com.elyric.lcwhale.dsh.ConnectState
-import com.elyric.lcwhale.dsh.SessionSummaryUi
-import com.elyric.lcwhale.dsh.WorkspaceUi
 import com.elyric.lcwhale.foundation.constant.NetConstant
 import com.elyric.lcwhale.foundation.view.WhalePager
 import com.elyric.lcwhale.foundation.theme.AppThemeState
 import com.elyric.lcwhale.foundation.theme.ThemeMode
+import com.elyric.lcwhale.pager.workspace.WorkspaceViewModel
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
@@ -16,9 +15,7 @@ import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.module.SharedPreferencesModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.InputView
 import com.tencent.kuikly.core.views.Text
@@ -34,9 +31,6 @@ internal class HomePager : WhalePager() {
     private var urlInput by observable(NetConstant.WSConst.DEFAULT_URL)
     private var statusText by observable("未连接")
     private var notice by observable("")
-    private var sessionList: ObservableList<SessionSummaryUi> by observableList()
-    private var workspaceList: ObservableList<WorkspaceUi> by observableList()
-
     private lateinit var urlRef: ViewRef<InputView>
 
     override fun created() {
@@ -47,7 +41,9 @@ internal class HomePager : WhalePager() {
     override fun pageDidAppear() {
         super.pageDidAppear()
         bindEngineHooks()
-        refreshSessions()
+        if (engine.state.connectState == ConnectState.CONNECTED) {
+            WorkspaceViewModel.refresh(engine)
+        }
     }
 
     override fun viewDidLoad() {
@@ -124,7 +120,7 @@ internal class HomePager : WhalePager() {
                                 size(78f, 42f)
                                 borderRadius(6f)
                                 marginLeft(8f)
-                                backgroundColor(if (ctx.isConnected()) Color(0xFF9E9E9E) else Color(0xFF2196F3))
+                                backgroundColor(if (ctx.isConnected()) ctx.palette.surfaceMuted else ctx.palette.accent)
                                 titleAttr {
                                     text(if (ctx.isConnected()) "断开" else "连接")
                                     fontSize(14f)
@@ -139,7 +135,7 @@ internal class HomePager : WhalePager() {
                             text(ctx.statusText)
                             fontSize(13f)
                             marginTop(12f)
-                            color(if (ctx.isConnected()) Color(0xFF4CAF50) else ctx.palette.textMuted)
+                            color(if (ctx.isConnected()) ctx.palette.success else ctx.palette.textMuted)
                         }
                     }
                     View {
@@ -152,17 +148,17 @@ internal class HomePager : WhalePager() {
                             attr {
                                 size(108f, 38f)
                                 borderRadius(6f)
-                                backgroundColor(Color(0xFF4CAF50))
+                                backgroundColor(ctx.palette.success)
                                 titleAttr { text("新建会话"); fontSize(14f); color(Color.WHITE) }
                             }
-                            event { click { ctx.openChat(null) } }
+                            event { click { ctx.openChat() } }
                         }
                         Button {
                             attr {
                                 size(108f, 38f)
                                 borderRadius(6f)
                                 marginLeft(8f)
-                                backgroundColor(Color(0xFF795548))
+                                backgroundColor(ctx.palette.accent)
                                 titleAttr { text("进入工作区"); fontSize(14f); color(Color.WHITE) }
                             }
                             event { click { ctx.openWorkspacePage() } }
@@ -174,7 +170,7 @@ internal class HomePager : WhalePager() {
                                 text(ctx.notice)
                                 fontSize(12f)
                                 marginTop(14f)
-                                color(Color(0xFFFF9800))
+                                color(ctx.palette.warning)
                             }
                         }
                     }
@@ -210,8 +206,7 @@ internal class HomePager : WhalePager() {
     private fun toggleConnect() {
         if (isConnected()) {
             engine.close()
-            sessionList.clear()
-            workspaceList.clear()
+            WorkspaceViewModel.clear()
         } else {
             acquireModule<SharedPreferencesModule>(SharedPreferencesModule.MODULE_NAME)
                 .setItem(NetConstant.WSConst.PREF_KEY_LAST_URL, urlInput)
@@ -220,28 +215,11 @@ internal class HomePager : WhalePager() {
     }
 
     private fun refreshAll() {
-        refreshSessions()
-        refreshWorkspaces()
+        WorkspaceViewModel.refresh(engine)
     }
 
-    private fun refreshSessions() {
-        if (engine.state.connectState != ConnectState.CONNECTED) return
-        engine.listSessions { list ->
-            sessionList.clear()
-            sessionList.addAll(list)
-        }
-    }
-
-    private fun refreshWorkspaces() {
-        if (engine.state.connectState != ConnectState.CONNECTED) return
-        engine.listWorkspaces { list ->
-            workspaceList.clear()
-            workspaceList.addAll(list)
-        }
-    }
-
-    private fun openChat(summary: SessionSummaryUi?) {
-        openChatPage(summary?.sessionId ?: "", summary?.title ?: "", summary?.cwd ?: "")
+    private fun openChat() {
+        openChatPage("", "", "")
     }
 
     private fun openChatPage(sessionId: String, title: String, cwd: String) {

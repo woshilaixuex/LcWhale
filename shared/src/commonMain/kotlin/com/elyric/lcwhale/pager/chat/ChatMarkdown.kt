@@ -7,20 +7,25 @@ import com.tencent.kuikly.core.views.RichTextView
 import com.tencent.kuikly.core.views.Span
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
+import com.tencent.kuikly.core.views.compose.Button
 
 /**
  * Renders assistant output using the same block-oriented model as the Kuikly
  * Markdown demo: paragraphs, headings, quotes, lists, tables and fenced code
  * are separate layout blocks, while inline emphasis is rendered as spans.
  */
-internal fun ViewContainer<*, *>.AiMarkdownContent(markdown: String, palette: ThemePalette) {
+internal fun ViewContainer<*, *>.AiMarkdownContent(
+    markdown: String,
+    palette: ThemePalette,
+    onCodeCopy: (String) -> Unit = {},
+) {
     parseMarkdownBlocks(markdown).forEach { block ->
         when (block) {
             is MarkdownBlock.Paragraph -> MarkdownParagraph(block, palette)
             is MarkdownBlock.Heading -> MarkdownHeading(block, palette)
             is MarkdownBlock.Quote -> MarkdownQuote(block, palette)
             is MarkdownBlock.ListItems -> MarkdownList(block, palette)
-            is MarkdownBlock.Code -> MarkdownCode(block, palette)
+            is MarkdownBlock.Code -> MarkdownCode(block, palette, onCodeCopy)
             is MarkdownBlock.Table -> MarkdownTable(block, palette)
             MarkdownBlock.Divider -> {
                 View {
@@ -240,7 +245,11 @@ private fun ViewContainer<*, *>.MarkdownList(block: MarkdownBlock.ListItems, pal
     }
 }
 
-private fun ViewContainer<*, *>.MarkdownCode(block: MarkdownBlock.Code, palette: ThemePalette) {
+private fun ViewContainer<*, *>.MarkdownCode(
+    block: MarkdownBlock.Code,
+    palette: ThemePalette,
+    onCodeCopy: (String) -> Unit,
+) {
     View {
         attr {
             marginTop(6f)
@@ -249,14 +258,35 @@ private fun ViewContainer<*, *>.MarkdownCode(block: MarkdownBlock.Code, palette:
             borderRadius(6f)
             backgroundColor(palette.surfaceMuted)
         }
-        if (block.language.isNotEmpty()) {
-            Text {
-                attr {
-                    text(block.language)
-                    fontSize(11f)
-                    marginBottom(5f)
-                    color(palette.accent)
+        View {
+            attr {
+                flexDirectionRow()
+                marginBottom(5f)
+                selectable(com.tencent.kuikly.core.views.SelectableOption.DISABLE)
+            }
+            if (block.language.isNotEmpty()) {
+                Text {
+                    attr {
+                        text(block.language)
+                        fontSize(11f)
+                        color(palette.accent)
+                    }
                 }
+            }
+            View { attr { flex(1f) } }
+            Button {
+                attr {
+                    height(24f)
+                    padding(left = 7f, right = 7f)
+                    borderRadius(5f)
+                    backgroundColor(palette.surface)
+                    titleAttr {
+                        text("复制代码")
+                        fontSize(11f)
+                        color(palette.textMuted)
+                    }
+                }
+                event { click { onCodeCopy(block.text) } }
             }
         }
         Text {

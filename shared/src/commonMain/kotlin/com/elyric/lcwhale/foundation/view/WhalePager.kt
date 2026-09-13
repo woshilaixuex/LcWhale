@@ -7,6 +7,7 @@ import com.elyric.lcwhale.foundation.module.DSHWebSocketModule
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.module.Module
 import com.tencent.kuikly.core.module.SharedPreferencesModule
+import com.tencent.kuikly.core.reactive.handler.observable
 import com.elyric.lcwhale.foundation.theme.*
 
 /**
@@ -17,15 +18,21 @@ import com.elyric.lcwhale.foundation.theme.*
  */
 internal abstract class WhalePager : BasePager() {
 
+    private var themeRevision by observable(0)
+
     protected val palette: ThemePalette
-        get() = AppThemeState.palette
+        get() {
+            themeRevision
+            return AppThemeState.palette
+        }
 
     protected fun currentThemeMode(): ThemeMode = ThemeMode.from(
         acquireModule<SharedPreferencesModule>(SharedPreferencesModule.MODULE_NAME).getItem(THEME_MODE_KEY)
     )
 
     protected fun setThemeMode(mode: ThemeMode) {
-        AppThemeState.mode = mode
+        AppThemeState.updateMode(mode)
+        themeRevision += 1
         acquireModule<SharedPreferencesModule>(SharedPreferencesModule.MODULE_NAME).setItem(THEME_MODE_KEY, mode.value)
     }
 
@@ -42,9 +49,9 @@ internal abstract class WhalePager : BasePager() {
 
     override fun created() {
         super.created()
-        AppThemeState.systemDark = super.isNightMode()
+        AppThemeState.updateSystemDark(super.isNightMode())
         if (!AppThemeState.initialized) {
-            AppThemeState.mode = currentThemeMode()
+            AppThemeState.updateMode(currentThemeMode())
             AppThemeState.initialized = true
         }
         engine.attach(webSocketModule)
@@ -52,7 +59,8 @@ internal abstract class WhalePager : BasePager() {
 
     override fun themeDidChanged(data: com.tencent.kuikly.core.nvi.serialization.json.JSONObject) {
         super.themeDidChanged(data)
-        AppThemeState.systemDark = data.optBoolean(IS_NIGHT_MODE_KEY)
+        AppThemeState.updateSystemDark(data.optBoolean(IS_NIGHT_MODE_KEY))
+        themeRevision += 1
     }
 
     override fun pageDidAppear() {
@@ -64,7 +72,7 @@ internal abstract class WhalePager : BasePager() {
     override fun pageWillDestroy() {
         super.pageWillDestroy()
         // 只让出事件通道,连接保持;连接的关闭由连接页的断开按钮显式控制
-        engine.detach()
+        engine.detach(webSocketModule)
     }
 
     override fun body(): ViewBuilder {

@@ -16,7 +16,6 @@ import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
@@ -28,11 +27,8 @@ internal class WorkspaceSessionPager : WhalePager() {
     private var statusText by observable("未连接")
     private var notice by observable("")
     private var url = ""
-    private var workspaceList: ObservableList<WorkspaceUi> by observableList()
-    private var sessionList: ObservableList<SessionSummaryUi> by observableList()
-    private var unassignedSessionList: ObservableList<SessionSummaryUi> by observableList()
-    private var expandedWorkspaceIds by observable(setOf<String>())
-    private var unassignedExpanded by observable(false)
+    private val viewModel = WorkspaceViewModel
+    private var selectedSessionId by observable("")
 
     override fun created() {
         super.created()
@@ -105,29 +101,55 @@ internal class WorkspaceSessionPager : WhalePager() {
                 }
             }
 
-            Scroller {
-                attr {
-                    flex(1f)
-                    padding(all = 10f)
+            vif({ ctx.viewModel.loading }) {
+                View {
+                    attr { flex(1f); allCenter() }
+                    Text {
+                        attr {
+                            text("正在加载工作区与会话…")
+                            fontSize(13f)
+                            color(ctx.palette.textMuted)
+                        }
+                    }
                 }
-                vfor({ ctx.workspaceList }) { workspace ->
-                    WorkspaceSection(
-                        workspace = workspace,
-                        sessions = ctx.sessionsFor(workspace),
-                        expanded = workspace.workspaceId in ctx.expandedWorkspaceIds,
+            }
+            vif({ !ctx.viewModel.loading }) {
+                Scroller {
+                    attr {
+                        flex(1f)
+                        padding(all = 10f)
+                    }
+                    vfor({ ctx.viewModel.sections }) { section ->
+                        WorkspaceSection(
+                            section = section,
+                            selectedSessionId = { ctx.selectedSessionId },
+                            palette = ctx.palette,
+                            onSelect = { session -> ctx.selectedSessionId = session.sessionId },
+                            onContinue = { session -> ctx.openSession(session) },
+                            onNewSession = { ctx.openNewSession(section.workspace) },
+                        )
+                    }
+                    UnassignedSection(
+                        sessions = ctx.viewModel.unassignedSessions,
+                        count = { ctx.viewModel.unassignedCount },
+                        expanded = { ctx.viewModel.unassignedExpanded },
+                        selectedSessionId = { ctx.selectedSessionId },
                         palette = ctx.palette,
-                        onClick = { session -> ctx.openSession(session) },
-                        onNewSession = { ctx.openNewSession(workspace) },
-                        onToggle = { ctx.toggleWorkspace(workspace.workspaceId) },
+                        onToggle = { ctx.viewModel.unassignedExpanded = !ctx.viewModel.unassignedExpanded },
+                        onSelect = { session -> ctx.selectedSessionId = session.sessionId },
+                        onContinue = { session -> ctx.openSession(session) },
                     )
                 }
-                UnassignedSection(
-                    sessions = ctx.unassignedSessionList,
-                    expanded = ctx.unassignedExpanded,
-                    palette = ctx.palette,
-                    onToggle = { ctx.unassignedExpanded = !ctx.unassignedExpanded },
-                    onClick = { session -> ctx.openSession(session) },
-                )
+            }
+            vif({ ctx.viewModel.loaded && ctx.viewModel.sessions.isEmpty() }) {
+                Text {
+                    attr {
+                        text("未获取到历史会话，请确认 PC 端 dsh-connect 已加载会话能力")
+                        fontSize(12f)
+                        margin(all = 12f)
+                        color(ctx.palette.textMuted)
+                    }
+                }
             }
         }
     }
@@ -142,36 +164,10 @@ internal class WorkspaceSessionPager : WhalePager() {
 
     private fun refresh() {
         if (engine.state.connectState != ConnectState.CONNECTED) return
-        engine.listSessions { sessions ->
-            sessionList.clear()
-            val visibleSessions = sessions.filter { !it.deleted }
-            sessionList.addAll(visibleSessions)
-            rebuildUnassignedSessions()
+        viewModel.refresh(engine)
+        if (selectedSessionId.isNotEmpty() && viewModel.sessions.none { it.sessionId == selectedSessionId }) {
+                selectedSessionId = ""
         }
-        engine.listWorkspaces { workspaces ->
-            workspaceList.clear()
-            workspaceList.addAll(workspaces)
-            rebuildUnassignedSessions()
-        }
-    }
-
-    private fun rebuildUnassignedSessions() {
-        val assignedIds = workspaceList.flatMap { it.sessionIds }.toSet()
-        unassignedSessionList.clear()
-        unassignedSessionList.addAll(sessionList.filter { it.sessionId !in assignedIds })
-    }
-
-    private fun toggleWorkspace(workspaceId: String) {
-        expandedWorkspaceIds = if (workspaceId in expandedWorkspaceIds) {
-            expandedWorkspaceIds - workspaceId
-        } else {
-            expandedWorkspaceIds + workspaceId
-        }
-    }
-
-    private fun sessionsFor(workspace: WorkspaceUi): List<SessionSummaryUi> {
-        val ids = workspace.sessionIds.toSet()
-        return sessionList.filter { it.sessionId in ids }
     }
 
     private fun openSession(session: SessionSummaryUi) {
@@ -200,14 +196,15 @@ internal class WorkspaceSessionPager : WhalePager() {
 }
 
 private fun ViewContainer<*, *>.WorkspaceSection(
-    workspace: WorkspaceUi,
-    sessions: List<SessionSummaryUi>,
-    expanded: Boolean,
+    section: WorkspaceSectionUi,
+    selectedSessionId: () -> String,
     palette: ThemePalette,
-    onClick: (SessionSummaryUi) -> Unit,
+    onSelect: (SessionSummaryUi) -> Unit,
+    onContinue: (SessionSummaryUi) -> Unit,
     onNewSession: () -> Unit,
-    onToggle: () -> Unit,
 ) {
+    val workspace = section.workspace
+    val sessions = section.sessions
     View {
         attr {
             margin(top = 6f, bottom = 4f)
@@ -218,16 +215,30 @@ private fun ViewContainer<*, *>.WorkspaceSection(
         View {
             attr {
                 flexDirectionRow()
+                padding(all = 2f)
             }
             Text {
                 attr {
-                    text("${if (expanded) "收起" else "展开"}  ·  ${workspace.title.ifEmpty { workspace.path }}")
+                    text(workspace.title.ifEmpty { workspace.path })
                     fontSize(15f)
                     fontWeightBold()
                     flex(1f)
                     color(palette.success)
                 }
-                event { click { onToggle() } }
+            }
+            Button {
+                attr {
+                    size(58f, 30f)
+                    borderRadius(6f)
+                    marginRight(6f)
+                    backgroundColor(palette.surfaceMuted)
+                    titleAttr {
+                        text(if (section.expanded) "收起" else "展开")
+                        fontSize(12f)
+                        color(palette.text)
+                    }
+                }
+                event { click { section.expanded = !section.expanded } }
             }
             Button {
                 attr {
@@ -255,7 +266,7 @@ private fun ViewContainer<*, *>.WorkspaceSection(
                 }
             }
         }
-        vif({ expanded }) {
+        vif({ section.expanded }) {
             if (sessions.isEmpty()) {
                 Text {
                     attr {
@@ -266,7 +277,15 @@ private fun ViewContainer<*, *>.WorkspaceSection(
                     }
                 }
             } else {
-                sessions.forEach { session -> SessionRow(session, palette) { onClick(session) } }
+                sessions.forEach { session ->
+                    SessionRow(
+                        session = session,
+                        selected = { session.sessionId == selectedSessionId() },
+                        palette = palette,
+                        onSelect = { onSelect(session) },
+                        onContinue = { onContinue(session) },
+                    )
+                }
             }
         }
     }
@@ -274,10 +293,13 @@ private fun ViewContainer<*, *>.WorkspaceSection(
 
 private fun ViewContainer<*, *>.UnassignedSection(
     sessions: ObservableList<SessionSummaryUi>,
-    expanded: Boolean,
+    count: () -> Int,
+    expanded: () -> Boolean,
+    selectedSessionId: () -> String,
     palette: ThemePalette,
     onToggle: () -> Unit,
-    onClick: (SessionSummaryUi) -> Unit,
+    onSelect: (SessionSummaryUi) -> Unit,
+    onContinue: (SessionSummaryUi) -> Unit,
 ) {
     View {
         attr {
@@ -286,16 +308,35 @@ private fun ViewContainer<*, *>.UnassignedSection(
             borderRadius(8f)
             backgroundColor(palette.surface)
         }
-        Text {
+        View {
             attr {
-                text("${if (expanded) "收起" else "展开"}  ·  未分组会话  ·  ${sessions.size} 个")
-                fontSize(15f)
-                fontWeightBold()
-                color(palette.text)
+                flexDirectionRow()
+                padding(all = 2f)
             }
-            event { click { onToggle() } }
+            Text {
+                attr {
+                    text("未分组会话  ·  ${count()} 个")
+                    fontSize(15f)
+                    fontWeightBold()
+                    flex(1f)
+                    color(palette.text)
+                }
+            }
+            Button {
+                attr {
+                    size(58f, 30f)
+                    borderRadius(6f)
+                    backgroundColor(palette.surfaceMuted)
+                    titleAttr {
+                        text(if (expanded()) "收起" else "展开")
+                        fontSize(12f)
+                        color(palette.text)
+                    }
+                }
+                event { click { onToggle() } }
+            }
         }
-        vif({ expanded }) {
+        vif({ expanded() }) {
             if (sessions.isEmpty()) {
                 Text {
                     attr {
@@ -306,26 +347,59 @@ private fun ViewContainer<*, *>.UnassignedSection(
                     }
                 }
             } else {
-                sessions.forEach { session -> SessionRow(session, palette) { onClick(session) } }
+                vfor({ sessions }) { session ->
+                    SessionRow(
+                        session = session,
+                        selected = { session.sessionId == selectedSessionId() },
+                        palette = palette,
+                        onSelect = { onSelect(session) },
+                        onContinue = { onContinue(session) },
+                    )
+                }
             }
         }
     }
 }
 
-private fun ViewContainer<*, *>.SessionRow(session: SessionSummaryUi, palette: ThemePalette, onClick: () -> Unit) {
+private fun ViewContainer<*, *>.SessionRow(
+    session: SessionSummaryUi,
+    selected: () -> Boolean,
+    palette: ThemePalette,
+    onSelect: () -> Unit,
+    onContinue: () -> Unit,
+) {
     View {
         attr {
             margin(top = 6f, bottom = 2f)
             padding(all = 10f)
             borderRadius(6f)
-            backgroundColor(palette.surfaceMuted)
+            backgroundColor(if (selected()) palette.userBubble else palette.surfaceMuted)
         }
-        Text {
-            attr {
-                text(session.title.ifEmpty { session.sessionId })
-                fontSize(14f)
-                fontWeightBold()
-                color(palette.text)
+        View {
+            attr { flexDirectionRow() }
+            Text {
+                attr {
+                    text(session.title.ifEmpty { session.sessionId })
+                    fontSize(14f)
+                    fontWeightBold()
+                    flex(1f)
+                    color(palette.text)
+                }
+            }
+            vif({ selected() }) {
+                Button {
+                    attr {
+                        size(76f, 28f)
+                        borderRadius(6f)
+                        backgroundColor(palette.accent)
+                        titleAttr {
+                            text("继续会话")
+                            fontSize(12f)
+                            color(Color.WHITE)
+                        }
+                    }
+                    event { click { onContinue() } }
+                }
             }
         }
         Text {
@@ -336,6 +410,14 @@ private fun ViewContainer<*, *>.SessionRow(session: SessionSummaryUi, palette: T
                 color(palette.textMuted)
             }
         }
-        event { click { onClick() } }
+        Text {
+            attr {
+                text("${session.messageCount} 条消息${if (session.live) "  ·  活跃" else ""}")
+                fontSize(11f)
+                marginTop(3f)
+                color(if (selected()) palette.accent else palette.textMuted)
+            }
+        }
+        event { click { onSelect() } }
     }
 }

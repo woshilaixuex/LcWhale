@@ -59,9 +59,13 @@ internal class DSHClient {
     }
 
     /** 页面销毁时调用:让出事件通道,连接保持。 */
-    fun detach() {
-        module?.detachWS()
-        module = null
+    fun detach(owner: DSHWebSocketModule) {
+        // A page can be destroyed after the next page has already attached.
+        // Never clear the newer page's transport in that case.
+        if (module === owner) {
+            owner.detachWS()
+            module = null
+        }
     }
 
     fun connect(url: String) {
@@ -98,7 +102,10 @@ internal class DSHClient {
         val id = "r${++seq}"
         println("[DSH_TRACE] send req id=$id code=$code payload=${payload?.toString()?.take(240)}")
         pending[id] = onRes
-        sendFrame(DSHProtocol.req(id, code, payload))
+        if (!sendFrame(DSHProtocol.req(id, code, payload))) {
+            pending.remove(id)
+            onRes(DSHRequestResult(false, null, DSHProtocol.ERR_CONNECTION_CLOSED, "页面未 attach,无法发送"))
+        }
         return id
     }
 
@@ -114,21 +121,22 @@ internal class DSHClient {
         sendFrame(DSHProtocol.ping())
     }
 
-    private fun sendFrame(frame: JSONObject) {
+    private fun sendFrame(frame: JSONObject): Boolean {
         val m = module ?: run {
             warn("页面未 attach,无法发送")
-            return
+            return false
         }
         val text = frame.toString()
         if (text.encodeToByteArray().size > DSHProtocol.MAX_FRAME_BYTES) {
             warn("帧超过 ${DSHProtocol.MAX_FRAME_BYTES} 字节上限,已丢弃")
-            return
+            return false
         }
         m.sendText(text) { ack ->
             if (ack?.optBoolean("ok") == false) {
                 warn("发送失败:${ack.optString("code", DSHProtocol.ERR_SEND_FAILED)}")
             }
         }
+        return true
     }
 
     // ── 原生上行事件 ─────────────────────────────────────────────────────────
