@@ -105,6 +105,8 @@ internal class ChatPager : WhalePager() {
             View {
                 attr {
                     flexDirectionRow()
+                    height(26f)
+                    allCenter()
                     marginLeft(12f)
                     marginRight(12f)
                     marginTop(2f)
